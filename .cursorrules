@@ -1,0 +1,402 @@
+# CJDB 数据抓取 - 开发规则
+
+本项目采用**面向对象架构**，遵循以下开发原则。
+
+---
+
+## 🏗️ 架构原则
+
+### 1. 职责单一 (Single Responsibility)
+每个类只做一件事：
+- **Crawler**：识别页面 → 爬取数据 → 标注页面 → 管理采集状态
+- **Store**：接收数据 → 分发到适配器 → 返回结果
+- **Renderer**：渲染按钮 → 更新计数 → 配置弹窗
+- **Main**：监听事件 → 调度 Crawler/Renderer/Store
+
+### 2. 面向接口 (Interface-Oriented)
+所有 Crawler 必须实现 `BaseCrawler` 定义的接口：
+```js
+class BaseCrawler {
+  canHandle(url): boolean
+  getDataType(): string
+  async crawl(opts): Object | Array
+  marker(): void
+  getCollectionCount(): number
+  getCollectionTargets(): Array
+  getCrawlerState(): Object
+}
+```
+
+### 3. 依赖注入 (Dependency Injection)
+通过构造函数注入依赖，不在内部 new：
+```js
+// ✅ 正确
+class Main {
+  constructor(crawlers, renderer, store) {
+    this.crawlers = crawlers
+    this.renderer = renderer
+    this.store = store
+  }
+}
+
+// ❌ 错误
+class Main {
+  constructor() {
+    this.crawlers = [new XhsNoteCrawler()] // 不要在内部 new
+  }
+}
+```
+
+### 4. 数据封装 (Encapsulation)
+内部状态私有，通过方法导出：
+```js
+class XhsNoteCrawler {
+  constructor() {
+    this.commentCollection = {} // 私有状态
+  }
+
+  getCrawlerState() {
+    // 对外导出状态，不暴露内部实现
+    return {
+      collectionType: 'comment',
+      count: Object.keys(this.commentCollection).length,
+      items: [...]
+    }
+  }
+}
+```
+
+### 5. Main 只传递 (No Business Logic in Main)
+Main 只做调度和传递，不做遍历、不做业务逻辑：
+```js
+// ✅ 正确
+async _onClickCollect() {
+  const data = await this.currentCrawler.crawl()
+  const results = await this.store.save(this.currentDataType, data)
+}
+
+// ❌ 错误
+async _onClickCollect() {
+  const data = await this.currentCrawler.crawl()
+  // 不要在 Main 里遍历处理数据
+  for (const item of data) {
+    await this.store.save(this.currentDataType, item)
+  }
+}
+```
+
+---
+
+## 📝 代码风格
+
+### 类命名
+- **Crawler 类**：`XiaohongshuNoteCrawler`（平台 + 类型 + Crawler）
+- **Store 类**：`NotionStore`（存储源 + Store）
+- **主类**：`Main`、`Renderer`
+
+### 方法命名
+- **判断方法**：`canHandle()`、`isValid()`
+- **获取方法**：`getDataType()`、`getCollectionCount()`、`getCrawlerState()`
+- **执行方法**：`crawl()`、`marker()`、`render()`
+- **私有方法**：`_extractData()`、`_injectMarker()`（下划线开头）
+
+### 文件组织
+```
+core/
+├── crawlers/
+│   ├── BaseCrawler.js          # 基类
+│   └── XiaohongshuNoteCrawler.js  # 具体实现
+├── stores/
+│   ├── Store.js                # 统一入口
+│   └── NotionStore.js          # 适配器
+├── Main.js
+└── Renderer.js
+```
+
+---
+
+## 🎯 类设计规范
+
+### Crawler 类必须实现的方法
+
+```js
+class XiaohongshuNoteCrawler extends BaseCrawler {
+  // 1. 识别：判断是否能处理该 URL
+  canHandle(url) {
+    return /xiaohongshu\.com\/explore/.test(url)
+  }
+
+  // 2. 类型：返回数据类型
+  getDataType() {
+    return 'xiaohongshu-note'
+  }
+
+  // 3. 爬取：返回业务数据（要存储的）
+  async crawl(opts) {
+    return {
+      url: 'https://...',
+      title: '...',
+      content: '...'
+    }
+  }
+
+  // 4. 标注：注入编号和勾选框
+  marker() {
+    // 在页面上注入 #1, #2, ✓
+  }
+
+  // 5. 计数：返回当前勾选的数量
+  getCollectionCount() {
+    return Object.keys(this.commentCollection)
+      .filter(id => this.commentCollection[id]?.checked)
+      .length
+  }
+
+  // 6. 目标：返回要采集的目标列表（批量采集用）
+  getCollectionTargets() {
+    // 单条采集返回空数组
+    return []
+  }
+
+  // 7. 状态：返回爬虫状态（元数据）
+  getCrawlerState() {
+    return {
+      collectionType: 'comment',
+      count: 10,
+      checked: 8,
+      items: [...]
+    }
+  }
+}
+```
+
+### Store 适配器规范
+
+```js
+// core/stores/NotionStore.js
+window.CJDB_Store.register('notion', {
+  async save(type, data, config) {
+    // 处理逻辑
+    return { ok: true, action: 'create', pageId: '...' }
+  }
+})
+```
+
+---
+
+## 📊 数据流规范
+
+### crawl() vs getCrawlerState()
+
+| 方法 | 返回内容 | 用途 |
+|------|---------|------|
+| `crawl()` | 业务数据（要存储的） | 给 Store 存储 |
+| `getCrawlerState()` | 元数据（状态信息） | 调试、报告、监控 |
+
+**示例：**
+```js
+// crawl() 返回业务数据
+await crawler.crawl()
+// 返回：{ url: '...', title: '...', content: '...', likes: 100 }
+
+// getCrawlerState() 返回状态
+crawler.getCrawlerState()
+// 返回：{ collectionType: 'note', count: 20, checked: 15, items: [...] }
+```
+
+---
+
+## 🚀 扩展新平台
+
+### 步骤 1：创建 Crawler
+
+```js
+// core/crawlers/DouyinCrawler.js
+class DouyinCrawler extends BaseCrawler {
+  constructor() {
+    super()
+    this.videoCollection = {}
+  }
+
+  canHandle(url) {
+    return /douyin\.com/.test(url)
+  }
+
+  getDataType() {
+    return 'douyin-video'
+  }
+
+  async crawl(opts) {
+    return {
+      url: opts.url,
+      title: '...',
+      views: 1000
+    }
+  }
+
+  marker() {
+    // 标注逻辑
+  }
+
+  getCrawlerState() {
+    return {
+      collectionType: 'video',
+      count: Object.keys(this.videoCollection).length,
+      items: [...]
+    }
+  }
+}
+
+window.DouyinCrawler = DouyinCrawler
+```
+
+### 步骤 2：注册到 Main
+
+```js
+// content/boot.js
+const crawlers = [
+  new XiaohongshuNoteCrawler(),
+  new DouyinCrawler() // 新增
+]
+```
+
+### 步骤 3：更新 Renderer 配置
+
+```js
+// core/Renderer.js
+this.COLLECT_TARGET = {
+  'xiaohongshu-note': { btnText: '采集小红书笔记', label: '小红书笔记' },
+  'douyin-video': { btnText: '采集抖音视频', label: '抖音' } // 新增
+}
+```
+
+### 步骤 4：更新 manifest.json
+
+```json
+{
+  "content_scripts": [
+    {
+      "matches": ["https://www.douyin.com/*"],
+      "js": [
+        "core/crawlers/DouyinCrawler.js",
+        "content/boot.js"
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## ❌ 禁止事项
+
+### 1. 不要在 Main 里做业务逻辑
+```js
+// ❌ 错误
+async _onClickCollect() {
+  const data = await this.currentCrawler.crawl()
+  // 不要在这里遍历、过滤、处理数据
+  for (const item of data) {
+    if (item.likes > 100) {
+      await this.store.save(this.currentDataType, item)
+    }
+  }
+}
+
+// ✅ 正确
+async _onClickCollect() {
+  const data = await this.currentCrawler.crawl()
+  const results = await this.store.save(this.currentDataType, data)
+}
+```
+
+### 2. 不要暴露内部状态
+```js
+// ❌ 错误
+class XhsNoteCrawler {
+  getCommentCollection() {
+    return this.commentCollection // 直接暴露内部状态
+  }
+}
+
+// ✅ 正确
+class XhsNoteCrawler {
+  getCrawlerState() {
+    return {
+      collectionType: 'comment',
+      count: Object.keys(this.commentCollection).length,
+      items: Object.keys(this.commentCollection).map(id => ({
+        id,
+        checked: this.commentCollection[id].checked
+      }))
+    }
+  }
+}
+```
+
+### 3. 不要在 Crawler 里调用 Store
+```js
+// ❌ 错误
+class XhsNoteCrawler {
+  async crawl() {
+    const data = this._extractData()
+    await window.CJDB_Store.save('xiaohongshu-note', data) // 不要这样做
+    return data
+  }
+}
+
+// ✅ 正确
+class XhsNoteCrawler {
+  async crawl() {
+    const data = this._extractData()
+    return data // 只返回数据，存储由 Main 调度
+  }
+}
+```
+
+### 4. 不要过度拆分文件
+```js
+// ❌ 错误：不要每个方法都拆成单独的文件
+core/crawlers/xiaohongshu/
+├── canHandle.js
+├── getDataType.js
+├── crawl.js
+└── marker.js
+
+// ✅ 正确：一个 Crawler 一个文件
+core/crawlers/
+└── XiaohongshuNoteCrawler.js
+```
+
+---
+
+## 🔍 调试技巧
+
+### 1. 查看爬虫状态
+```js
+// 在 Console 执行
+const state = window.CJDB_Main.currentCrawler.getCrawlerState()
+console.log(state)
+```
+
+### 2. 手动触发采集
+```js
+// 在 Console 执行
+const data = await window.CJDB_Main.currentCrawler.crawl()
+console.log(data)
+```
+
+### 3. 查看存储结果
+```js
+// 在 Console 执行
+const results = await window.CJDB_Store.save('xiaohongshu-note', data)
+console.log(results)
+```
+
+---
+
+## 📚 参考资料
+
+- [README.md](README.md) - 项目概览
+- [Web采集模式.md](docs/Web采集模式.md) - 采集模式说明
+- [Chrome Extension 文档](https://developer.chrome.com/docs/extensions/mv3/)
