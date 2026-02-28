@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "jsx": "preserve",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx", "**/*.vue"],
+  "exclude": ["node_modules", ".output", "output"]
+}

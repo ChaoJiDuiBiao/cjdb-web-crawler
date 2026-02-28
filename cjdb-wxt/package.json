@@ -1,0 +1,23 @@
+{
+  "name": "cjdb-wxt",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip"
+  },
+  "dependencies": {
+    "@notionhq/client": "^2.2.15",
+    "chrono-node": "^2.9.0",
+    "element-plus": "^2.5.0",
+    "vue": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.253",
+    "@wxt-dev/module-vue": "^1.0.0",
+    "sass": "^1.69.0",
+    "typescript": "^5.3.0",
+    "wxt": "^0.20.0"
+  }
+}

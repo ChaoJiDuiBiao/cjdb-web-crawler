@@ -358,11 +358,23 @@
         const existing = await api.findByUniqueField(schema, 'URL', url);
         const props = toNotionProperties(data, schema, api.fieldNameMap, !!existing);
 
+        // 转换 commentList 为 blocks
+        const children = data.commentList ? convertCommentListToBlocks(data.commentList) : null;
+
         if (existing) {
           await api.updatePage(existing.id, props);
+          // 更新页面内容（评论列表）
+          if (children && children.length > 0) {
+            try {
+              await replacePageContent(api, existing.id, children);
+              console.log('[Notion] 笔记评论列表已更新');
+            } catch (e) {
+              console.warn('[Notion] 更新评论列表失败:', e);
+            }
+          }
           return { ok: true, action: 'update', pageId: existing.id };
         } else {
-          const result = await api.createPage(props);
+          const result = await api.createPage(props, children);
           return { ok: true, action: 'create', pageId: result?.id };
         }
       } catch (e) {
@@ -531,6 +543,66 @@
     });
 
     console.log(`[Notion] 转换笔记列表为 ${blocks.length} 个 blocks`);
+    return blocks;
+  }
+
+  // ==================== 辅助函数：转换 commentList 为 blocks ====================
+  function convertCommentListToBlocks(commentList) {
+    if (!commentList || commentList.length === 0) {
+      return [];
+    }
+
+    const blocks = [];
+
+    // 添加标题
+    blocks.push({
+      object: 'block',
+      type: 'heading_2',
+      heading_2: {
+        rich_text: [{ type: 'text', text: { content: '评论列表' } }]
+      }
+    });
+
+    // 统计信息
+    const totalComments = commentList.length;
+    const totalReplies = commentList.reduce((sum, c) => sum + (c.replies?.length || 0), 0);
+    const stats = `共 ${totalComments} 条评论，${totalReplies} 条回复\n`;
+
+    blocks.push({
+      object: 'block',
+      type: 'paragraph',
+      paragraph: {
+        rich_text: [{ type: 'text', text: { content: stats } }]
+      }
+    });
+
+    // 转换每条评论
+    commentList.forEach(comment => {
+      const commentText = `#${comment.no} 💬 ${comment.comment} | ⏰ ${comment.published_at} | ❤️ ${comment.likes}`;
+      blocks.push({
+        object: 'block',
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [{ type: 'text', text: { content: commentText } }]
+        }
+      });
+
+      // 添加回复
+      if (comment.replies && comment.replies.length > 0) {
+        comment.replies.forEach(reply => {
+          const replyText = `  ↳ R${reply.no} ${reply.comment} | ⏰ ${reply.published_at} | ❤️ ${reply.likes}`;
+          blocks.push({
+            object: 'block',
+            type: 'paragraph',
+            paragraph: {
+              rich_text: [{ type: 'text', text: { content: replyText } }]
+            }
+          });
+        });
+      }
+    });
+
+    console.log(`[Notion] 转换评论列表为 ${blocks.length} 个 blocks`);
     return blocks;
   }
 

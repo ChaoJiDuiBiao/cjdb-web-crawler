@@ -95,22 +95,10 @@
   }
 
   function init() {
-    // 1. 注入面板 HTML（两个独立圆形按钮，上下布局，无大块背景）
+    // 1. 注入面板容器（Vue 会接管这个容器）
     const root = document.createElement('div');
     root.id = 'cjdb-panel-root';
-    root.className = 'cjdb-panel cjdb-theme-xiaohongshu';
-    root.innerHTML = `
-      <div class="cjdb-storage-wrap">
-        <button class="cjdb-btn cjdb-storage-btn" title="数据源，点击展开">
-          <span class="cjdb-store-label">数据源</span>
-        </button>
-        <div class="cjdb-storage-dropdown"></div>
-      </div>
-      <button class="cjdb-btn cjdb-collect" title="拖动移动 / 点击采集" data-collect-target="">
-        <span class="cjdb-collect-main">采集</span>
-        <span class="cjdb-collect-sub"></span>
-      </button>
-    `;
+    root.className = 'cjdb-panel-container';
 
     // 2. 注入 CSS
     const style = document.createElement('link');
@@ -143,23 +131,70 @@
     `;
     document.body.appendChild(modal);
 
-    // 4. 初始化 Main
+    // 4. 初始化 Main（使用 VueRenderer）
     const crawlers = [
       new XiaohongshuNoteCrawler(),
       new XiaohongshuFeedCrawler(),
       new XiaohongshuAccountCrawler()
     ];
 
-    const renderer = new Renderer(root);
+    const renderer = new VueRenderer(root);
     const store = window.CJDB_Store;
 
     const main = new Main(crawlers, renderer, store);
     main.start();
 
-    // 5. 初始化面板拖动
-    _setupPanelDrag(root);
+    // 5. 初始化面板拖动（需要等 Vue 渲染完成）
+    setTimeout(() => {
+      _setupPanelDrag(root);
+    }, 100);
+
+    // 6. 配置弹窗事件（需要在这里设置，因为弹窗不在 Vue 中）
+    _setupConfigModal(renderer);
 
     console.log('[CJDB] Main 已启动');
+  }
+
+  function _setupConfigModal(renderer) {
+    const modal = document.getElementById('cjdb-config-modal');
+    if (!modal) return;
+
+    const closeModal = () => {
+      modal.classList.remove('cjdb-show');
+    };
+
+    const saveStore = async () => {
+      const dataType = modal.dataset.dataType;
+      const editIndex = parseInt(modal.dataset.editIndex, 10);
+      const storeType = modal.querySelector('[name="storeType"]').value;
+      const inputs = modal.querySelectorAll('.cjdb-modal-form-body input');
+      const config = { type: storeType };
+
+      inputs.forEach(inp => {
+        if (inp.name && inp.value) config[inp.name] = inp.value;
+      });
+
+      const stores = await window.StorageConfig?.getStoresForType(dataType);
+      if (editIndex >= 0) {
+        stores[editIndex] = config;
+      } else {
+        stores.push(config);
+      }
+
+      await window.StorageConfig?.saveStoresForType(dataType, stores);
+      closeModal();
+
+      // 刷新 Vue 状态
+      if (renderer.vueState) {
+        await renderer._loadStorageConfig(renderer.vueState);
+      }
+    };
+
+    modal.querySelector('.cjdb-modal-cancel')?.addEventListener('click', closeModal);
+    modal.querySelector('.cjdb-modal-submit')?.addEventListener('click', saveStore);
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeModal();
+    });
   }
 
   function run() {

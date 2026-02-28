@@ -191,10 +191,9 @@ class Main {
       }
     });
 
-    // 6. 采集按钮点击
-    const collectBtn = this.renderer.root.querySelector('.cjdb-collect');
-    if (collectBtn) {
-      collectBtn.addEventListener('click', () => this._onClickCollect());
+    // 6. 采集按钮点击（通过 VueRenderer 注册回调）
+    if (this.renderer.onCollect) {
+      this.renderer.onCollect(() => this._onClickCollect());
     }
   }
 

@@ -12,10 +12,11 @@ class XiaohongshuNoteCrawler extends BaseCrawler {
     super();
     /**
      * 评论采集集合
-     * @type {Object<string, {checked: boolean, content?: string}>}
-     * @example { 'comment-123': { checked: true, content: '太好看了！' } }
+     * @type {Object<string, {no: number, checked: boolean, content: string, time: string, likes: number, repliesCount: number, replies: Object}>}
+     * @example { 'comment-123': { no: 1, checked: true, content: '太好看了！', time: '2小时前', likes: 10, repliesCount: 2, replies: {} } }
      */
     this.commentCollection = {};
+    this.commentCounter = 0;
     this.lastNoteUrl = '';
     this.MARKER_STYLE_ID = 'cjdb-xhs-note-marker-style';
   }
@@ -41,6 +42,10 @@ class XiaohongshuNoteCrawler extends BaseCrawler {
       if (hovercardData.likes != null) noteData.authorLikes = hovercardData.likes;
       if (hovercardData.following != null) noteData.authorFollowing = hovercardData.following;
     }
+
+    // 添加评论列表（结构化数据）
+    noteData.commentList = this._extractCommentList();
+
     return noteData;
   }
 
@@ -50,6 +55,7 @@ class XiaohongshuNoteCrawler extends BaseCrawler {
     // URL 变化时重置状态
     if (url !== this.lastNoteUrl) {
       this.commentCollection = {};
+      this.commentCounter = 0;
       this.lastNoteUrl = url;
     }
 
@@ -62,16 +68,47 @@ class XiaohongshuNoteCrawler extends BaseCrawler {
    * @returns {Object}
    */
   getCrawlerState() {
-    const items = Object.keys(this.commentCollection).map(id => ({
-      id,
-      checked: this.commentCollection[id]?.checked !== false,
-      content: this.commentCollection[id]?.content || ''
-    }));
+    const items = [];
+    let totalCount = 0;
+    let checkedCount = 0;
+
+    // 遍历父评论
+    for (const [id, data] of Object.entries(this.commentCollection)) {
+      totalCount++;
+      const isChecked = data.checked !== false;
+      if (isChecked) checkedCount++;
+
+      items.push({
+        id,
+        no: data.no,
+        checked: isChecked,
+        content: data.content || '',
+        isParent: true
+      });
+
+      // 添加回复
+      if (data.replies) {
+        for (const [replyId, replyData] of Object.entries(data.replies)) {
+          totalCount++;
+          const replyChecked = replyData.checked !== false;
+          if (replyChecked) checkedCount++;
+
+          items.push({
+            id: replyId,
+            no: replyData.no,
+            checked: replyChecked,
+            content: replyData.content || '',
+            isReply: true,
+            parentNo: data.no
+          });
+        }
+      }
+    }
 
     return {
       collectionType: 'comment',
-      count: items.length,
-      checked: items.filter(item => item.checked).length,
+      count: totalCount,
+      checked: checkedCount,
       items
     };
   }
@@ -459,28 +496,60 @@ class XiaohongshuNoteCrawler extends BaseCrawler {
     const parents = ctx.querySelectorAll('.parent-comment');
     if (!parents.length) return;
 
-    let no = 0;
     parents.forEach((parent) => {
       const mainEl = parent.querySelector('.comment-item:not(.comment-item-sub)') || parent.querySelector('.comment-item');
       if (!mainEl) return;
 
       const commentId = mainEl.getAttribute('id') || this._getCommentKey(mainEl);
       if (!(commentId in this.commentCollection)) {
-        this.commentCollection[commentId] = { checked: true };
+        this.commentCounter++;
+        // 提取父评论数据
+        const content = (mainEl.querySelector('.note-text') || mainEl).textContent?.trim() || '';
+        const info = mainEl.querySelector('.info');
+        const time = info?.textContent?.match(/(昨天|今天|\d{1,2}月\d{1,2}日)\s*\d{1,2}:\d{2}|(\d+分钟前|\d+小时前|\d+天前)/)?.[0] || '';
+        const likesEl = mainEl.querySelector('.like-count, .likes, [class*="like"]');
+        const likes = likesEl ? this._parseCount(likesEl.textContent) : 0;
+
+        this.commentCollection[commentId] = {
+          no: this.commentCounter,
+          checked: true,
+          content,
+          time,
+          likes,
+          repliesCount: 0,
+          replies: {}
+        };
       }
-      no++;
-      this._injectCommentMarker(mainEl, `#${no}`, commentId);
+
+      const entry = this.commentCollection[commentId];
+      this._injectCommentMarker(mainEl, `#${entry.no}`, commentId);
 
       // 标注回复评论
       const replyContainer = parent.querySelector('.reply-container');
       if (replyContainer) {
         const replyEls = replyContainer.querySelectorAll('.comment-item-sub, .comment-item, [class*="comment-item"]');
+        entry.repliesCount = replyEls.length;
+
         replyEls.forEach((replyEl, ri) => {
           const replyId = replyEl.getAttribute('id') || this._getCommentKey(replyEl);
-          if (!(replyId in this.commentCollection)) {
-            this.commentCollection[replyId] = { checked: true };
+          if (!(replyId in entry.replies)) {
+            // 提取回复数据
+            const content = (replyEl.querySelector('.note-text') || replyEl).textContent?.trim() || '';
+            const info = replyEl.querySelector('.info');
+            const time = info?.textContent?.match(/(昨天|今天|\d{1,2}月\d{1,2}日)\s*\d{1,2}:\d{2}|(\d+分钟前|\d+小时前|\d+天前)/)?.[0] || '';
+            const likesEl = replyEl.querySelector('.like-count, .likes, [class*="like"]');
+            const likes = likesEl ? this._parseCount(likesEl.textContent) : 0;
+
+            entry.replies[replyId] = {
+              no: ri + 1,
+              checked: true,
+              content,
+              time,
+              likes
+            };
           }
-          this._injectCommentMarker(replyEl, `R${ri + 1}`, replyId);
+          const replyEntry = entry.replies[replyId];
+          this._injectCommentMarker(replyEl, `R${replyEntry.no}`, replyId);
         });
       }
     });
@@ -504,7 +573,17 @@ class XiaohongshuNoteCrawler extends BaseCrawler {
     cb.className = 'cjdb-comment-checkbox';
     cb.addEventListener('click', (e) => {
       e.stopPropagation();
-      const entry = this.commentCollection[key];
+      // 查找评论（可能是父评论或回复）
+      let entry = this.commentCollection[key];
+      if (!entry) {
+        // 可能是回复，查找父评论中的回复
+        for (const parentEntry of Object.values(this.commentCollection)) {
+          if (parentEntry.replies && parentEntry.replies[key]) {
+            entry = parentEntry.replies[key];
+            break;
+          }
+        }
+      }
       if (entry) {
         entry.checked = !entry.checked;
         cb.textContent = entry.checked ? '✓' : '○';
@@ -513,7 +592,16 @@ class XiaohongshuNoteCrawler extends BaseCrawler {
       }
     });
 
-    const entry = this.commentCollection[key];
+    // 初始状态
+    let entry = this.commentCollection[key];
+    if (!entry) {
+      for (const parentEntry of Object.values(this.commentCollection)) {
+        if (parentEntry.replies && parentEntry.replies[key]) {
+          entry = parentEntry.replies[key];
+          break;
+        }
+      }
+    }
     const checked = entry?.checked !== false;
     cb.textContent = checked ? '✓' : '○';
     cb.style.background = checked ? 'rgba(82,196,26,0.9)' : 'rgba(140,140,140,0.9)';
@@ -531,6 +619,51 @@ class XiaohongshuNoteCrawler extends BaseCrawler {
     const info = el.querySelector('.info');
     const time = info?.textContent?.match(/(昨天|今天|\d{1,2}月\d{1,2}日)\s*\d{1,2}:\d{2}/)?.[0] || '';
     return `${time}_${content}`;
+  }
+
+  /**
+   * 提取结构化的评论列表
+   * @returns {Array} 评论数组
+   */
+  _extractCommentList() {
+    const comments = [];
+
+    // 遍历父评论
+    for (const [commentId, data] of Object.entries(this.commentCollection)) {
+      if (data.checked === false) continue;
+
+      const comment = {
+        no: data.no,
+        comment: data.content || '',
+        published_at: data.time || '',
+        likes: data.likes || 0,
+        replies_count: data.repliesCount || 0,
+        checked: true,
+        replies: []
+      };
+
+      // 添加回复
+      if (data.replies && Object.keys(data.replies).length > 0) {
+        for (const [replyId, replyData] of Object.entries(data.replies)) {
+          if (replyData.checked === false) continue;
+
+          comment.replies.push({
+            no: replyData.no,
+            comment: replyData.content || '',
+            published_at: replyData.time || '',
+            likes: replyData.likes || 0,
+            checked: true
+          });
+        }
+      }
+
+      comments.push(comment);
+    }
+
+    // 按编号排序
+    comments.sort((a, b) => a.no - b.no);
+
+    return comments;
   }
 
   _injectMarkerStyles() {

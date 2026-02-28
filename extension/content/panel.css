@@ -204,6 +204,31 @@
   color: var(--cjdb-primary);
 }
 
+/* ==================== 进度提示 ==================== */
+.cjdb-tip-display {
+  padding: 8px 16px;
+  margin-top: 6px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--cjdb-primary);
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  white-space: nowrap;
+  animation: cjdb-fade-in 0.2s ease-out;
+}
+
+@keyframes cjdb-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* ==================== 配置弹窗 ==================== */
 .cjdb-modal-mask {
   position: fixed;

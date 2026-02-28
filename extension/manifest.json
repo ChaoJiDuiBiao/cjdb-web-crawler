@@ -37,6 +37,8 @@
         "https://mp.weixin.qq.com/*"
       ],
       "js": [
+        "libs/vue.global.prod.js",
+        "libs/element-plus.full.js",
         "utils/validators.js",
         "utils/StorageConfig.js",
         "utils/fetchProxy.js",
@@ -52,8 +54,12 @@
         "core/crawlers/XiaohongshuFeedCrawler.js",
         "core/crawlers/XiaohongshuAccountCrawler.js",
         "core/Renderer.js",
+        "core/VueRenderer.js",
         "core/Main.js",
         "content/boot.js"
+      ],
+      "css": [
+        "libs/element-plus.css"
       ],
       "run_at": "document_idle"
     }
