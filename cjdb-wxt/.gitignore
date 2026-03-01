@@ -9,3 +9,6 @@ web-ext.config.ts
 .DS_Store
 .env
 .env.local
+
+# 扩展签名私钥（切勿提交）
+.key.pem

@@ -1,4 +1,5 @@
 import type { XiaohongshuNote } from '@/types'
+import { CollectionType } from '@/types'
 
 interface NoteCollectionItem {
   no: number
@@ -96,7 +97,7 @@ export class XiaohongshuFeedCrawler {
     })
 
     return {
-      collectionType: 'note',
+      collectionType: CollectionType.XHSFeed,
       total: this.noteCollection.size,
       checked: checkedCount
     }

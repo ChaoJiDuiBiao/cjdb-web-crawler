@@ -1,4 +1,5 @@
 import type { XiaohongshuAccount } from '@/types'
+import { CollectionType } from '@/types'
 
 interface NoteCollectionItem {
   no: number
@@ -121,7 +122,7 @@ export class XiaohongshuAccountCrawler {
     })
 
     return {
-      collectionType: 'account',
+      collectionType: CollectionType.XHSAccount,
       total: this.noteCollection.size,
       checked: checkedCount
     }

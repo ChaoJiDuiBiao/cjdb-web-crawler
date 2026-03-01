@@ -1,4 +1,5 @@
-import type { XiaohongshuNote, Comment } from '@/types'
+import type { XiaohongshuNote, CommentExport } from '@/types'
+import { CollectionType } from '@/types'
 import { zh } from 'chrono-node'
 import { parseDateTime, formatDate } from '@/utils/dateTimeParse'
 
@@ -6,8 +7,27 @@ import { parseDateTime, formatDate } from '@/utils/dateTimeParse'
  * 小红书笔记爬虫
  * 功能：识别页面、标注评论、爬取数据
  */
+// 父评论内部数据
+interface ParentCommentData {
+  no: number
+  checked: boolean
+  content: string
+  time: string
+  likes: number
+  repliesCount: number
+  replies: Map<string, ReplyCommentData>
+}
+// 回复评论内部数据
+interface ReplyCommentData {
+  no: number
+  checked: boolean
+  content: string
+  time: string
+  likes: number
+}
+
 export class XiaohongshuNoteCrawler {
-  commentCollection: Map<string, Comment> = new Map()
+  commentCollection: Map<string, ParentCommentData> = new Map()
   commentCounter = 0
   lastNoteUrl = ''
 
@@ -199,12 +219,9 @@ export class XiaohongshuNoteCrawler {
       if (hovercardData.following != null) authorFollowing = hovercardData.following
     }
 
-    // 评论列表
+    // 评论列表（结构化：content + replies）
     showTip('正在整理评论列表...')
-    const commentList: Comment[] = []
-    this.commentCollection.forEach(comment => {
-      if (comment.checked) commentList.push(comment)
-    })
+    const commentList = this.extractCommentList()
 
     showTip('数据采集完成')
 
@@ -433,18 +450,70 @@ export class XiaohongshuNoteCrawler {
     return result
   }
 
-  // 标注评论（注入编号和勾选框）
-  marker(): void {
-    const url = location.href.split('?')[0]
+  // 提取结构化的评论列表（{ comment, published_at, replies: [...] }）
+  extractCommentList(): CommentExport[] {
+    const comments: CommentExport[] = []
 
-    // URL 变化时重置状态
+    for (const [, data] of this.commentCollection) {
+      if (data.checked === false) continue
+
+      const comment: CommentExport = {
+        no: data.no,
+        comment: data.content || '',
+        published_at: data.time || '',
+        likes: data.likes || 0,
+        replies_count: data.repliesCount || 0,
+        checked: true,
+        replies: []
+      }
+
+      if (data.replies && data.replies.size > 0) {
+        for (const [, replyData] of data.replies) {
+          if (replyData.checked === false) continue
+          comment.replies!.push({
+            no: replyData.no,
+            comment: replyData.content || '',
+            published_at: replyData.time || '',
+            likes: replyData.likes || 0,
+            checked: true
+          })
+        }
+      }
+      comments.push(comment)
+    }
+
+    comments.sort((a, b) => a.no - b.no)
+    return comments
+  }
+
+  private parseCount(str: string): number {
+    if (!str) return 0
+    const s = String(str).trim()
+    let m = 1
+    if (s.includes('w') || s.includes('万')) m = 10000
+    if (s.includes('k')) m = 1000
+    return Math.floor((parseFloat(s.replace(/[^\d.]/g, '')) || 0) * m)
+  }
+
+  private getCommentKey(el: Element): string {
+    const id = el.getAttribute('id')
+    if (id?.startsWith('comment-')) return id
+    const content = (el.querySelector('.note-text') || el).textContent?.trim()?.slice(0, 40) || ''
+    const info = el.querySelector('.info')
+    const time = info?.textContent?.match(/(昨天|今天|\d{1,2}月\d{1,2}日)\s*\d{1,2}:\d{2}|(\d+分钟前|\d+小时前|\d+天前)/)?.[0] || ''
+    return `${time}_${content}`
+  }
+
+  // 标注评论（注入编号和勾选框，支持 parent-comment + reply 结构）
+  marker(): void {
+    const url = this.getCurrentNoteUrl()
+
     if (url !== this.lastNoteUrl) {
       this.commentCollection.clear()
       this.commentCounter = 0
       this.lastNoteUrl = url
     }
 
-    // 注入样式
     if (!document.getElementById('cjdb-xhs-marker-style')) {
       const style = document.createElement('style')
       style.id = 'cjdb-xhs-marker-style'
@@ -484,81 +553,130 @@ export class XiaohongshuNoteCrawler {
       document.head.appendChild(style)
     }
 
-    // 标注评论
-    const comments = document.querySelectorAll('.comment-item, [class*="comment"]')
+    const ctx = this.getNoteContext()
+    const parents = ctx.querySelectorAll('.parent-comment')
+    if (!parents.length) return
 
-    comments.forEach((commentEl, index) => {
-      // 如果已标注，跳过
-      if (commentEl.querySelector('.cjdb-comment-marker-wrap')) return
+    parents.forEach((parent) => {
+      const mainEl = parent.querySelector('.comment-item:not(.comment-item-sub)') || parent.querySelector('.comment-item')
+      if (!mainEl) return
 
-      // 获取评论 ID
-      const commentId = `comment-${index}`
-
-      // 提取评论内容
-      const contentEl = commentEl.querySelector('.note-text, .content')
-      const content = contentEl?.textContent?.trim() || ''
-
-      if (!content) return
-
-      // 保存到集合
+      const commentId = mainEl.getAttribute('id') || this.getCommentKey(mainEl)
       if (!this.commentCollection.has(commentId)) {
         this.commentCounter++
+        const content = (mainEl.querySelector('.note-text') || mainEl).textContent?.trim() || ''
+        const info = mainEl.querySelector('.info')
+        const time = info?.textContent?.match(/(昨天|今天|\d{1,2}月\d{1,2}日)\s*\d{1,2}:\d{2}|(\d+分钟前|\d+小时前|\d+天前)/)?.[0] || ''
+        const likesEl = mainEl.querySelector('.like-count, .likes, [class*="like"]')
+        const likes = likesEl ? this.parseCount(likesEl.textContent || '') : 0
+
         this.commentCollection.set(commentId, {
-          id: commentId,
           no: this.commentCounter,
           checked: true,
           content,
-          time: '',
-          likes: 0
+          time,
+          likes,
+          repliesCount: 0,
+          replies: new Map()
         })
-        // 每标记一条就更新提示（使用 updateKey 更新同一个 tip）
-        ;(window as any).CJDB_TipsDisplay?.(`已标记 ${this.commentCounter} 条评论`, true, 'marker-comment')
       }
 
-      const comment = this.commentCollection.get(commentId)!
+      const entry = this.commentCollection.get(commentId)!
+      this.injectCommentMarker(mainEl, `#${entry.no}`, commentId)
 
-      // 注入标注
-      const wrap = document.createElement('span')
-      wrap.className = 'cjdb-comment-marker-wrap'
+      const replyContainer = parent.querySelector('.reply-container')
+      if (replyContainer) {
+        const replyEls = replyContainer.querySelectorAll('.comment-item-sub, .comment-item, [class*="comment-item"]')
+        entry.repliesCount = replyEls.length
 
-      const marker = document.createElement('span')
-      marker.className = 'cjdb-comment-marker'
-      marker.textContent = `#${comment.no}`
-      wrap.appendChild(marker)
+        replyEls.forEach((replyEl, ri) => {
+          const replyId = replyEl.getAttribute('id') || this.getCommentKey(replyEl)
+          if (!entry.replies.has(replyId)) {
+            const content = (replyEl.querySelector('.note-text') || replyEl).textContent?.trim() || ''
+            const info = replyEl.querySelector('.info')
+            const time = info?.textContent?.match(/(昨天|今天|\d{1,2}月\d{1,2}日)\s*\d{1,2}:\d{2}|(\d+分钟前|\d+小时前|\d+天前)/)?.[0] || ''
+            const likesEl = replyEl.querySelector('.like-count, .likes, [class*="like"]')
+            const likes = likesEl ? this.parseCount(likesEl.textContent || '') : 0
 
-      const checkbox = document.createElement('span')
-      checkbox.className = 'cjdb-comment-checkbox'
-      checkbox.textContent = comment.checked ? '✓' : '○'
-      checkbox.style.background = comment.checked ? 'rgba(82,196,26,0.9)' : 'rgba(140,140,140,0.9)'
-      checkbox.onclick = (e) => {
-        e.stopPropagation()
-        comment.checked = !comment.checked
-        checkbox.textContent = comment.checked ? '✓' : '○'
-        checkbox.style.background = comment.checked ? 'rgba(82,196,26,0.9)' : 'rgba(140,140,140,0.9)'
-
-        // 触发状态变化事件
-        window.dispatchEvent(new CustomEvent('cjdb-collection-changed'))
-      }
-      wrap.appendChild(checkbox)
-
-      // 插入到评论内容旁边
-      const insertRef = commentEl.querySelector('.author-wrapper .name, .name') || commentEl
-      if (insertRef && insertRef.parentNode) {
-        insertRef.parentNode.insertBefore(wrap, insertRef.nextSibling)
+            entry.replies.set(replyId, {
+              no: ri + 1,
+              checked: true,
+              content,
+              time,
+              likes
+            })
+          }
+          const replyEntry = entry.replies.get(replyId)!
+          this.injectCommentMarker(replyEl, `R${replyEntry.no}`, replyId, entry)
+        })
       }
     })
+
+    window.dispatchEvent(new CustomEvent('cjdb-collection-changed'))
   }
 
-  // 获取爬虫状态（给 UI 显示）
-  getCrawlerState() {
-    let checkedCount = 0
-    this.commentCollection.forEach(comment => {
-      if (comment.checked) checkedCount++
+  private injectCommentMarker(
+    el: Element,
+    label: string,
+    key: string,
+    parentEntry?: ParentCommentData
+  ): void {
+    if (el.querySelector('.cjdb-comment-marker-wrap')) return
+
+    const wrap = document.createElement('span')
+    wrap.className = 'cjdb-comment-marker-wrap'
+
+    const marker = document.createElement('span')
+    marker.className = 'cjdb-comment-marker'
+    marker.textContent = label
+    wrap.appendChild(marker)
+
+    const cb = document.createElement('span')
+    cb.className = 'cjdb-comment-checkbox'
+    cb.addEventListener('click', (e) => {
+      e.stopPropagation()
+      let entry = this.commentCollection.get(key) as ParentCommentData | ReplyCommentData | undefined
+      if (!entry && parentEntry) {
+        entry = parentEntry.replies.get(key)
+      }
+      if (entry) {
+        entry.checked = !entry.checked
+        cb.textContent = entry.checked ? '✓' : '○'
+        cb.style.background = entry.checked ? 'rgba(82,196,26,0.9)' : 'rgba(140,140,140,0.9)'
+        window.dispatchEvent(new CustomEvent('cjdb-collection-changed'))
+      }
     })
 
+    let entry = this.commentCollection.get(key) as ParentCommentData | ReplyCommentData | undefined
+    if (!entry && parentEntry) entry = parentEntry.replies.get(key)
+    const checked = entry?.checked !== false
+    cb.textContent = checked ? '✓' : '○'
+    cb.style.background = checked ? 'rgba(82,196,26,0.9)' : 'rgba(140,140,140,0.9)'
+    wrap.appendChild(cb)
+
+    const insertRef = el.querySelector('.author-wrapper .name, .author-wrapper .username, .name, .username') || el
+    if (insertRef?.parentNode) {
+      insertRef.parentNode.insertBefore(wrap, insertRef.nextSibling)
+    }
+  }
+
+  // 获取爬虫状态（给 UI 显示，含父评论+回复总数）
+  getCrawlerState() {
+    let totalCount = 0
+    let checkedCount = 0
+    for (const [, data] of this.commentCollection) {
+      totalCount++
+      if (data.checked !== false) checkedCount++
+      if (data.replies) {
+        for (const [, reply] of data.replies) {
+          totalCount++
+          if (reply.checked !== false) checkedCount++
+        }
+      }
+    }
     return {
-      collectionType: 'comment',
-      total: this.commentCollection.size,
+      collectionType: CollectionType.XHSNoteDetail,
+      total: totalCount,
       checked: checkedCount
     }
   }

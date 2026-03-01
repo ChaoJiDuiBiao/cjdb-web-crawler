@@ -1,7 +1,9 @@
-import type { StoreAdapter, StoreConfig, SaveResult, XiaohongshuNote, XiaohongshuAccount } from '@/types'
-import { tryShowTip } from '@/utils/tips'
+import type { StoreAdapter, StoreConfig, SaveResult, XiaohongshuNote, XiaohongshuAccount, WechatArticle } from '@/types'
+import { CollectionType } from '@/types'
+import { showPanelTip } from '@/utils/tips'
 
 const NOTION_VERSION = '2022-06-28'
+const NOTION_MARKDOWN_VERSION = '2025-09-03'
 
 // 笔记详情页 Schema（完整数据）
 const NOTE_SCHEMA = {
@@ -46,12 +48,36 @@ const ACCOUNT_SCHEMA = {
   '采集时间': { type: 'date', notionType: { date: {} } }
 }
 
+// 公众号文章 Schema（内容/数据/历史通用）
+// 正文不入库字段，保存到文档正文（blocks）
+const WECHAT_ARTICLE_SCHEMA = {
+  '标题': { type: 'title', notionType: { title: {} } },
+  'URL': { type: 'url', notionType: { url: {} }, unique: true },
+  '发布时间': { type: 'rich_text', notionType: { rich_text: {} } },
+  '公众号名称': { type: 'select', notionType: { select: {} } },
+  '公司名称': { type: 'rich_text', notionType: { rich_text: {} } },
+  '地区': { type: 'rich_text', notionType: { rich_text: {} } },
+  '主体名称': { type: 'rich_text', notionType: { rich_text: {} } },
+  '认证时间': { type: 'rich_text', notionType: { rich_text: {} } },
+  'gh_id': { type: 'rich_text', notionType: { rich_text: {} } },
+  '认证类型': { type: 'rich_text', notionType: { rich_text: {} } },
+  '封面': { type: 'files', notionType: { files: {} } },
+  '阅读量': { type: 'number', notionType: { number: { format: 'number' } } },
+  '拇指赞': { type: 'number', notionType: { number: { format: 'number' } } },
+  '爱心赞': { type: 'number', notionType: { number: { format: 'number' } } },
+  '转发量': { type: 'number', notionType: { number: { format: 'number' } } },
+  '收藏量': { type: 'number', notionType: { number: { format: 'number' } } },
+  '评论数': { type: 'number', notionType: { number: { format: 'number' } } },
+  '采集时间': { type: 'date', notionType: { date: {} } }
+}
+
 // 根据数据类型选择对应的 schema
 function getSchemaByType(type: string) {
   const schemaMap: Record<string, any> = {
-    'note': NOTE_SCHEMA,
-    'feed': FEED_SCHEMA,
-    'account': ACCOUNT_SCHEMA
+    [CollectionType.XHSNoteDetail]: NOTE_SCHEMA,
+    [CollectionType.XHSFeed]: FEED_SCHEMA,
+    [CollectionType.XHSAccount]: ACCOUNT_SCHEMA,
+    [CollectionType.WechatArticle]: WECHAT_ARTICLE_SCHEMA
   }
   return schemaMap[type] || null
 }
@@ -146,8 +172,27 @@ class NotionAPI {
     return this.request('POST', `/databases/${this.databaseId}/query`, { filter })
   }
 
-  async createPage(properties: any, children: any[] | null = null) {
+  async createPage(properties: any, children: any[] | null = null, markdown: string | null = null) {
     const payload: any = { parent: { database_id: this.databaseId }, properties }
+
+    // 优先使用 Markdown（需要 public integration 和 2025-09-03 版本）
+    if (markdown && typeof markdown === 'string' && markdown.trim()) {
+      try {
+        console.log('[Notion] 尝试使用 Markdown API，内容长度:', markdown.length)
+        const result = await this.requestWithVersion('POST', '/pages', { ...payload, markdown }, NOTION_MARKDOWN_VERSION)
+        console.log('[Notion] Markdown API 成功')
+        return result
+      } catch (e: any) {
+        console.warn('[Notion] Markdown API 失败，回退到 blocks 方式', e?.message)
+        // 如果 Markdown API 失败，将 markdown 转为 blocks
+        if (!children || children.length === 0) {
+          children = markdownToBlocks(markdown)
+          console.log('[Notion] 将 Markdown 转为 blocks，共', children.length, '个')
+        }
+      }
+    }
+
+    // 回退到 blocks 方式
     if (children && Array.isArray(children) && children.length > 0) {
       payload.children = children.length > 100 ? children.slice(0, 100) : children
     }
@@ -158,6 +203,31 @@ class NotionAPI {
         await this.request('PATCH', `/blocks/${result.id}/children`, { children: rest.slice(i, i + 100) })
       }
     }
+    return result
+  }
+
+  async requestWithVersion(method: string, endpoint: string, data: any = null, version: string = NOTION_VERSION) {
+    const url = `https://api.notion.com/v1${endpoint}`
+    const options: RequestInit = {
+      method,
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        'Notion-Version': version
+      }
+    }
+
+    if (data) {
+      options.body = JSON.stringify(data)
+    }
+
+    const response = await fetch(url, options)
+    const result = await response.json()
+
+    if (!response.ok) {
+      throw new Error(result.message || `Notion API error: ${response.status}`)
+    }
+
     return result
   }
 
@@ -179,13 +249,25 @@ class NotionAPI {
     }
 
     if (saveFieldMapCallback) {
-      // 处理 title 字段
+      // 处理 title 字段：Notion 新建数据库首列默认为「名称」，需重命名为 schema 中的标题名（如「标题」），否则首列必填校验会失败
       const titleFields = Object.entries(schema).filter(([, c]: any) => c.type === 'title')
       if (titleFields.length > 0) {
         const [titleFieldName] = titleFields[0]
         const titleProp = Object.entries(existing).find(([, p]: any) => p.type === 'title')
         if (titleProp) {
-          this.fieldNameMap[titleFieldName as string] = titleProp[0]
+          const currentTitleName = titleProp[0]
+          this.fieldNameMap[titleFieldName as string] = currentTitleName
+          // 若首列名称与 schema 设计不符（如「名称」≠「标题」），则重命名为首列为我们设计的名字
+          if (currentTitleName !== titleFieldName) {
+            try {
+              await this.updateDatabaseSchema({ [currentTitleName]: { name: titleFieldName } })
+              this.fieldNameMap[titleFieldName as string] = titleFieldName
+              existing[titleFieldName] = existing[currentTitleName]
+              delete existing[currentTitleName]
+            } catch (e: any) {
+              console.warn('[Notion] 重命名首列失败，将使用映射:', currentTitleName, '->', titleFieldName, e?.message)
+            }
+          }
         } else {
           this.fieldNameMap[titleFieldName as string] = titleFieldName as string
         }
@@ -291,7 +373,47 @@ function toNotionProperties(raw: any, schema: any, fieldNameMap: Record<string, 
     followingCount: '关注数'
   }
 
-  const map = hasNickname ? accountFieldMap : (hasContent ? noteFieldMap : cardFieldMap)
+  // 公众号文章字段映射（正文 content 不入 properties，主体信息来自 principalInfo）
+  const wechatArticleFieldMap: Record<string, string> = {
+    title: '标题',
+    url: 'URL',
+    publishTimeStr: '发布时间',
+    principalNickname: '公众号名称',
+    principalCompanyName: '公司名称',
+    principalRegion: '地区',
+    principalName: '主体名称',
+    principalVerifyDate: '认证时间',
+    principalGhId: 'gh_id',
+    principalVerifyType: '认证类型',
+    coverUrl: '封面',
+    read: '阅读量',
+    zan: '拇指赞',
+    looking: '爱心赞',
+    shareNum: '转发量',
+    collectNum: '收藏量',
+    commentCount: '评论数'
+  }
+
+  const hasWechatArticle = schema.hasOwnProperty('阅读量')
+  const map = hasWechatArticle
+    ? wechatArticleFieldMap
+    : hasNickname
+      ? accountFieldMap
+      : hasContent
+        ? noteFieldMap
+        : cardFieldMap
+
+  // 公众号文章：将 principalInfo 扁平化到 raw 供映射使用
+  if (hasWechatArticle && raw?.principalInfo) {
+    const p = raw.principalInfo
+    raw.principalNickname = p.nickname
+    raw.principalCompanyName = p.companyName
+    raw.principalRegion = p.region
+    raw.principalName = p.name
+    raw.principalVerifyDate = p.verifyDate
+    raw.principalGhId = p.ghId
+    raw.principalVerifyType = p.verifyType
+  }
 
   const out: any = {}
   for (const [fieldName, config] of Object.entries(schema) as any) {
@@ -304,28 +426,50 @@ function toNotionProperties(raw: any, schema: any, fieldNameMap: Record<string, 
     const key = Object.keys(map).find((k) => map[k] === fieldName)
     let value = key ? raw[key] : raw[fieldName]
 
+    let propValue: any = null
     if (config.type === 'title') {
-      out[actualName] = { title: [{ text: { content: String(value || '未知') } }] }
+      propValue = { title: [{ text: { content: String(value || '未知') } }] }
     } else if (config.type === 'url') {
-      out[actualName] = { url: value || '' }
+      propValue = { url: value || '' }
     } else if (config.type === 'date') {
-      out[actualName] = value ? { date: { start: value } } : null
+      propValue = value ? { date: { start: value } } : null
     } else if (config.type === 'rich_text') {
       const text = typeof value === 'string' ? value : (value && typeof value === 'object' ? '' : String(value || ''))
-      out[actualName] = { rich_text: [{ text: { content: text.slice(0, 2000) } }] }
+      propValue = { rich_text: [{ text: { content: text.slice(0, 2000) } }] }
     } else if (config.type === 'files') {
       const arr = Array.isArray(value) ? value : (typeof value === 'string' && value ? [value] : [])
-      out[actualName] = {
+      propValue = {
         files: arr.map((u) => ({ type: 'external', name: 'image', external: { url: u } }))
       }
+    } else if (config.type === 'select') {
+      const s = typeof value === 'string' ? value.trim() : ''
+      propValue = s ? { select: { name: s.slice(0, 100) } } : null
     } else if (config.type === 'multi_select') {
       const arr = Array.isArray(value) ? value : []
-      out[actualName] = { multi_select: arr.filter(Boolean).map((t) => ({ name: String(t).trim() })).filter((t) => t.name) }
+      const items = arr.filter(Boolean).map((t) => ({ name: String(t).trim() })).filter((t) => t.name)
+      propValue = items.length > 0 ? { multi_select: items } : null
     } else if (config.type === 'number') {
-      out[actualName] = { number: parseInt(String(value), 10) || 0 }
+      // 只在有有效数字时设置，避免用 0 覆盖已有数据
+      if (value != null) {
+        const num = parseInt(String(value), 10)
+        if (!isNaN(num)) {
+          propValue = { number: num }
+        }
+      }
+    }
+
+    // 不写入 null，避免 Notion 报 body failed validation（如 select 空值、数据库已有同名只读属性等）
+    if (propValue != null) {
+      out[actualName] = propValue
     }
   }
   return out
+}
+
+/** 判断是否为「缺少字段」类错误（数据库不存在某属性） */
+function isMissingPropertyError(err: any): boolean {
+  const msg = err?.message || String(err)
+  return /is not a property that exists/i.test(msg)
 }
 
 function parseNotionError(err: any): string {
@@ -340,8 +484,15 @@ function parseNotionError(err: any): string {
 }
 
 // ==================== 笔记详情页存储（单条，带重试） ====================
-async function saveXhsNoteToNotion(data: XiaohongshuNote, schema: any, api: NotionAPI, dbId: string, type: string): Promise<SaveResult> {
-  tryShowTip('正在保存到 Notion...', false)
+async function saveXhsNoteToNotion(
+  data: XiaohongshuNote,
+  schema: any,
+  api: NotionAPI,
+  dbId: string,
+  type: string,
+  fromTabId?: number
+): Promise<SaveResult> {
+  showPanelTip('正在连接 Notion...', fromTabId)
 
   const url = data?.url || (data?.noteId ? `https://www.xiaohongshu.com/explore/${data.noteId}` : '')
   if (!url) return { ok: false, error: '缺少笔记 URL' }
@@ -350,6 +501,7 @@ async function saveXhsNoteToNotion(data: XiaohongshuNote, schema: any, api: Noti
   for (let retry = 0; retry < 2; retry++) {
     try {
       if (retry > 0) {
+        showPanelTip('正在重新检查数据库字段...', fromTabId)
         await browser.storage.local.remove([initFlagKey(dbId, type), fieldMapKey(dbId, type)])
         api.schemaCache = null
         const fieldMap = await getFieldMap(dbId, type)
@@ -359,6 +511,7 @@ async function saveXhsNoteToNotion(data: XiaohongshuNote, schema: any, api: Noti
         await markInitialized(dbId, type)
       }
 
+      showPanelTip('正在查询是否已存在该笔记...', fromTabId)
       const existing = await api.findByUniqueField(schema, 'URL', url)
       const props = toNotionProperties(data, schema, api.fieldNameMap, !!existing)
 
@@ -366,12 +519,12 @@ async function saveXhsNoteToNotion(data: XiaohongshuNote, schema: any, api: Noti
       const children = data.commentList ? convertCommentListToBlocks(data.commentList) : null
 
       if (existing) {
-        tryShowTip('更新已有笔记...', false)
+        showPanelTip('正在更新已有笔记...', fromTabId)
         await api.updatePage(existing.id, props)
         // 更新页面内容（评论列表）
         if (children && children.length > 0) {
           try {
-            tryShowTip('更新评论列表...', false)
+            showPanelTip(`正在写入 ${children.length} 条评论...`, fromTabId)
             await replacePageContent(api, existing.id, children)
             console.log('[Notion] 笔记评论列表已更新')
           } catch (e) {
@@ -380,7 +533,7 @@ async function saveXhsNoteToNotion(data: XiaohongshuNote, schema: any, api: Noti
         }
         return { ok: true, action: 'update', pageId: existing.id }
       } else {
-        tryShowTip('创建新笔记...', false)
+        showPanelTip(children?.length ? '正在创建新笔记并写入评论...' : '正在创建新笔记...', fromTabId)
         const result = await api.createPage(props, children)
         return { ok: true, action: 'create', pageId: result?.id }
       }
@@ -397,11 +550,16 @@ async function saveXhsNoteToNotion(data: XiaohongshuNote, schema: any, api: Noti
 }
 
 // ==================== 发现页存储（批量，优化去重） ====================
-async function saveXhsFeedToNotion(data: XiaohongshuNote[], schema: any, api: NotionAPI): Promise<SaveResult[]> {
+async function saveXhsFeedToNotion(
+  data: XiaohongshuNote[],
+  schema: any,
+  api: NotionAPI,
+  fromTabId?: number
+): Promise<SaveResult[]> {
   const items = Array.isArray(data) ? data : [data]
   if (items.length === 0) return []
 
-  tryShowTip(`正在批量保存 ${items.length} 条笔记...`, false)
+  showPanelTip(`正在准备保存 ${items.length} 条笔记...`, fromTabId)
   console.log(`[Notion] 批量保存发现页 ${items.length} 条`)
 
   // 提取所有 URL
@@ -417,9 +575,11 @@ async function saveXhsFeedToNotion(data: XiaohongshuNote[], schema: any, api: No
   }
 
   // 批量查询已存在的（每次 10 个）
-  tryShowTip('检查重复数据...', false)
+  const totalBatches = Math.ceil(urls.length / 10)
   const existingMap = new Map<string, string>()
   for (let i = 0; i < urls.length; i += 10) {
+    const batchNum = Math.floor(i / 10) + 1
+    showPanelTip(`正在检查重复 (${batchNum}/${totalBatches})...`, fromTabId)
     const batch = urls.slice(i, i + 10)
     const actualFieldName = api.fieldNameMap['URL'] || 'URL'
     const orFilters = batch.map(url => ({ property: actualFieldName, url: { equals: url } }))
@@ -437,8 +597,9 @@ async function saveXhsFeedToNotion(data: XiaohongshuNote[], schema: any, api: No
 
   console.log(`[Notion] ${existingMap.size} 条已存在, ${urls.length - existingMap.size} 条需创建`)
 
-  if (urls.length - existingMap.size > 0) {
-    tryShowTip(`正在保存 ${urls.length - existingMap.size} 条新笔记...`, false)
+  const toCreateCount = urls.length - existingMap.size
+  if (toCreateCount > 0) {
+    showPanelTip(`共有 ${toCreateCount} 条新笔记待写入...`, fromTabId)
   }
 
   // 分类
@@ -454,7 +615,8 @@ async function saveXhsFeedToNotion(data: XiaohongshuNote[], schema: any, api: No
 
   // 并发创建（3 并发，避免 rate limit）
   for (let i = 0; i < toCreate.length; i += 3) {
-    tryShowTip(`保存进度: ${Math.min(i + 3, toCreate.length)}/${toCreate.length}`, false)
+    const done = Math.min(i + 3, toCreate.length)
+    showPanelTip(`正在写入第 ${done}/${toCreate.length} 条...`, fromTabId)
     const batch = toCreate.slice(i, i + 3)
     await Promise.all(batch.map(async ({ item, idx, url }) => {
       try {
@@ -462,6 +624,7 @@ async function saveXhsFeedToNotion(data: XiaohongshuNote[], schema: any, api: No
         const result = await api.createPage(props)
         results[idx] = { ok: true, action: 'create', pageId: result?.id }
       } catch (e: any) {
+        if (isMissingPropertyError(e)) throw e
         console.error(`[Notion] 创建失败 (${url}):`, e)
         results[idx] = { ok: false, error: parseNotionError(e) }
       }
@@ -474,9 +637,127 @@ async function saveXhsFeedToNotion(data: XiaohongshuNote[], schema: any, api: No
   return results
 }
 
+// ==================== 公众号文章存储（统一入口，内部按需分批） ====================
+async function saveWechatArticlesToNotion(
+  data: WechatArticle[],
+  schema: any,
+  api: NotionAPI,
+  dbId: string,
+  type: string,
+  fromTabId?: number
+): Promise<SaveResult | SaveResult[]> {
+  const items = Array.isArray(data) ? data : []
+  if (items.length === 0) return []
+
+  showPanelTip(`正在保存 ${items.length} 篇公众号文章...`, fromTabId)
+
+  const urlMap = new Map<string, { item: WechatArticle; idx: number }>()
+  items.forEach((item, idx) => {
+    const url = item?.url || ''
+    if (url) urlMap.set(url, { item, idx })
+  })
+
+  const urls = Array.from(urlMap.keys())
+  if (urls.length === 0) {
+    return items.map(() => ({ ok: false, error: '缺少 URL' }))
+  }
+
+  const existingMap = new Map<string, string>()
+  const totalBatches = Math.ceil(urls.length / 10)
+  for (let i = 0; i < urls.length; i += 10) {
+    const batchNum = Math.floor(i / 10) + 1
+    showPanelTip(`正在检查是否已存在 (${batchNum}/${totalBatches})...`, fromTabId)
+    const batch = urls.slice(i, i + 10)
+    const actualFieldName = api.fieldNameMap['URL'] || 'URL'
+    const orFilters = batch.map((url) => ({ property: actualFieldName, url: { equals: url } }))
+    try {
+      const result = await api.queryDatabase({ or: orFilters })
+      ;(result?.results || []).forEach((page: any) => {
+        const urlProp = page.properties?.[actualFieldName]
+        const url = urlProp?.url
+        if (url) existingMap.set(url, page.id)
+      })
+    } catch (e) {
+      console.warn('[Notion] 批量查询失败:', e)
+    }
+  }
+
+  const results: SaveResult[] = new Array(items.length)
+  const toCreate: Array<{ item: WechatArticle; idx: number; url: string }> = []
+  const toUpdate: Array<{ item: WechatArticle; idx: number; pageId: string }> = []
+  urlMap.forEach(({ item, idx }, url) => {
+    const pageId = existingMap.get(url)
+    if (pageId) {
+      toUpdate.push({ item, idx, pageId })
+    } else {
+      toCreate.push({ item, idx, url })
+    }
+  })
+
+  // 已存在则更新
+  for (let i = 0; i < toUpdate.length; i += 3) {
+    const done = Math.min(i + 3, toUpdate.length)
+    showPanelTip(`正在更新第 ${done}/${toUpdate.length} 篇...`, fromTabId)
+    const batch = toUpdate.slice(i, i + 3)
+    await Promise.all(
+      batch.map(async ({ item, idx, pageId }) => {
+        try {
+          const props = toNotionProperties(item, schema, api.fieldNameMap, true)
+          await api.updatePage(pageId, props)
+          const markdown = convertWechatContentToMarkdown(item)
+          if (markdown) {
+            // TODO: Notion Markdown API 的更新功能需要特殊的 endpoint
+            // 暂时仍使用 replacePageContent（blocks 方式）
+            await replacePageContent(api, pageId, markdownToBlocks(markdown))
+          }
+          results[idx] = { ok: true, action: 'update', pageId }
+        } catch (e: any) {
+          if (isMissingPropertyError(e)) throw e
+          results[idx] = { ok: false, error: parseNotionError(e) }
+        }
+      })
+    )
+    if (i + 3 < toUpdate.length) {
+      await new Promise((r) => setTimeout(r, 350))
+    }
+  }
+
+  // 不存在则新建
+  for (let i = 0; i < toCreate.length; i += 3) {
+    const done = Math.min(i + 3, toCreate.length)
+    showPanelTip(`正在新建第 ${done}/${toCreate.length} 篇...`, fromTabId)
+    const batch = toCreate.slice(i, i + 3)
+    await Promise.all(
+      batch.map(async ({ item, idx }) => {
+        try {
+          const props = toNotionProperties(item, schema, api.fieldNameMap, false)
+          const markdown = convertWechatContentToMarkdown(item)
+          const result = await api.createPage(props, null, markdown || undefined)
+          results[idx] = { ok: true, action: 'create', pageId: result?.id }
+        } catch (e: any) {
+          if (isMissingPropertyError(e)) throw e
+          results[idx] = { ok: false, error: parseNotionError(e) }
+        }
+      })
+    )
+    if (i + 3 < toCreate.length) {
+      await new Promise((r) => setTimeout(r, 350))
+    }
+  }
+
+  return results.length === 1 ? results[0] : results
+}
+
 // ==================== 账号主页存储（单条账号信息，带重试） ====================
-async function saveXhsAccountToNotion(data: XiaohongshuAccount, schema: any, api: NotionAPI, dbId: string, type: string): Promise<SaveResult> {
-  tryShowTip('正在保存账号信息到 Notion...', false)
+async function saveXhsAccountToNotion(
+  data: XiaohongshuAccount,
+  schema: any,
+  api: NotionAPI,
+  dbId: string,
+  type: string,
+  fromTabId?: number
+): Promise<SaveResult> {
+  showPanelTip('正在连接 Notion 并保存账号信息...', fromTabId)
 
   const userId = data?.userId
   if (!userId) return { ok: false, error: '缺少账号 ID' }
@@ -494,6 +775,7 @@ async function saveXhsAccountToNotion(data: XiaohongshuAccount, schema: any, api
         await markInitialized(dbId, type)
       }
 
+      showPanelTip('正在查询是否已存在该账号...', fromTabId)
       const existing = await api.findByUniqueField(schema, '账号ID', userId)
       const props = toNotionProperties(data, schema, api.fieldNameMap, !!existing)
 
@@ -501,12 +783,12 @@ async function saveXhsAccountToNotion(data: XiaohongshuAccount, schema: any, api
       const children = data.noteListText ? convertNoteListToBlocks(data.noteListText) : null
 
       if (existing) {
-        tryShowTip('更新已有账号...', false)
+        showPanelTip('正在更新已有账号信息...', fromTabId)
         await api.updatePage(existing.id, props)
         // 更新页面内容（笔记列表）
         if (children && children.length > 0) {
           try {
-            tryShowTip('更新笔记列表...', false)
+            showPanelTip('正在写入笔记列表...', fromTabId)
             await replacePageContent(api, existing.id, children)
             console.log('[Notion] 账号笔记列表已更新')
           } catch (e) {
@@ -515,7 +797,7 @@ async function saveXhsAccountToNotion(data: XiaohongshuAccount, schema: any, api
         }
         return { ok: true, action: 'update', pageId: existing.id }
       } else {
-        tryShowTip('创建新账号...', false)
+        showPanelTip('正在创建新账号页面...', fromTabId)
         const result = await api.createPage(props, children)
         return { ok: true, action: 'create', pageId: result?.id }
       }
@@ -529,6 +811,170 @@ async function saveXhsAccountToNotion(data: XiaohongshuAccount, schema: any, api
   const errMsg = parseNotionError(lastErr)
   console.error('[Notion]', lastErr)
   return { ok: false, error: errMsg }
+}
+
+// ==================== 辅助函数：转换公众号正文为 blocks/markdown（保存到文档正文） ====================
+const NOTION_TEXT_MAX = 2000
+
+/**
+ * 获取公众号文章的 Markdown 内容
+ * 优先使用已转换的 contentMarkdown，其次使用纯文本 content
+ */
+function convertWechatContentToMarkdown(article: WechatArticle | undefined): string {
+  console.log('[Notion] convertWechatContentToMarkdown 被调用')
+
+  if (!article) {
+    console.log('[Notion] article 不存在')
+    return ''
+  }
+
+  console.log('[Notion] article.contentMarkdown 存在:', !!article.contentMarkdown)
+  console.log('[Notion] article.contentMarkdown 长度:', article.contentMarkdown?.length || 0)
+  console.log('[Notion] article.content 存在:', !!article.content)
+  console.log('[Notion] article.content 长度:', article.content?.length || 0)
+
+  // 优先使用已转换的 Markdown（在 content script 中转换）
+  if (article.contentMarkdown && typeof article.contentMarkdown === 'string') {
+    const markdown = article.contentMarkdown.trim()
+    if (markdown) {
+      console.log('[Notion] 使用 contentMarkdown，长度:', markdown.length)
+      console.log('[Notion] Markdown 预览（前1000字符）:', markdown.substring(0, 1000))
+      return markdown
+    }
+  }
+
+  // 回退到纯文本
+  const content = article.content
+  if (content && typeof content === 'string') {
+    console.log('[Notion] 使用纯文本 content，长度:', content.length)
+    return content.trim()
+  }
+
+  console.log('[Notion] 没有可用的内容')
+  return ''
+}
+
+/**
+ * 将 Markdown 转换为 Notion blocks（用于更新页面内容或回退时使用）
+ * 简单实现：处理段落、标题、列表
+ */
+function markdownToBlocks(markdown: string): any[] {
+  if (!markdown || typeof markdown !== 'string') return []
+  const trimmed = markdown.trim()
+  if (!trimmed) return []
+
+  const blocks: any[] = []
+  const lines = trimmed.split('\n')
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i].trim()
+
+    // 跳过空行
+    if (!line) {
+      i++
+      continue
+    }
+
+    // 标题
+    if (line.startsWith('# ')) {
+      blocks.push({
+        object: 'block',
+        type: 'heading_1',
+        heading_1: {
+          rich_text: [{ type: 'text', text: { content: line.substring(2).slice(0, NOTION_TEXT_MAX) } }]
+        }
+      })
+      i++
+      continue
+    }
+    if (line.startsWith('## ')) {
+      blocks.push({
+        object: 'block',
+        type: 'heading_2',
+        heading_2: {
+          rich_text: [{ type: 'text', text: { content: line.substring(3).slice(0, NOTION_TEXT_MAX) } }]
+        }
+      })
+      i++
+      continue
+    }
+    if (line.startsWith('### ')) {
+      blocks.push({
+        object: 'block',
+        type: 'heading_3',
+        heading_3: {
+          rich_text: [{ type: 'text', text: { content: line.substring(4).slice(0, NOTION_TEXT_MAX) } }]
+        }
+      })
+      i++
+      continue
+    }
+
+    // 无序列表
+    if (line.startsWith('- ') || line.startsWith('* ')) {
+      blocks.push({
+        object: 'block',
+        type: 'bulleted_list_item',
+        bulleted_list_item: {
+          rich_text: [{ type: 'text', text: { content: line.substring(2).slice(0, NOTION_TEXT_MAX) } }]
+        }
+      })
+      i++
+      continue
+    }
+
+    // 有序列表
+    const orderedListMatch = line.match(/^(\d+)\.\s+(.*)/)
+    if (orderedListMatch) {
+      blocks.push({
+        object: 'block',
+        type: 'numbered_list_item',
+        numbered_list_item: {
+          rich_text: [{ type: 'text', text: { content: orderedListMatch[2].slice(0, NOTION_TEXT_MAX) } }]
+        }
+      })
+      i++
+      continue
+    }
+
+    // 代码块
+    if (line.startsWith('```')) {
+      let codeContent = ''
+      i++
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        codeContent += lines[i] + '\n'
+        i++
+      }
+      if (codeContent) {
+        blocks.push({
+          object: 'block',
+          type: 'code',
+          code: {
+            rich_text: [{ type: 'text', text: { content: codeContent.slice(0, NOTION_TEXT_MAX) } }],
+            language: 'plain text'
+          }
+        })
+      }
+      i++ // 跳过结束的 ```
+      continue
+    }
+
+    // 普通段落（可能很长，需要切分）
+    for (let j = 0; j < line.length; j += NOTION_TEXT_MAX) {
+      const chunk = line.slice(j, j + NOTION_TEXT_MAX)
+      blocks.push({
+        object: 'block',
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [{ type: 'text', text: { content: chunk } }]
+        }
+      })
+    }
+    i++
+  }
+
+  return blocks
 }
 
 // ==================== 辅助函数：转换 noteList 为 blocks ====================
@@ -595,9 +1041,9 @@ function convertCommentListToBlocks(commentList: any[]) {
     }
   })
 
-  // 转换每条评论
+  // 转换每条评论（与 JS 一致：使用 comment、published_at）
   commentList.forEach(comment => {
-    const commentText = `#${comment.no} 💬 ${comment.content} | ⏰ ${comment.time} | ❤️ ${comment.likes}`
+    const commentText = `#${comment.no} 💬 ${comment.comment} | ⏰ ${comment.published_at} | ❤️ ${comment.likes}`
     blocks.push({
       object: 'block',
       type: 'paragraph',
@@ -609,7 +1055,7 @@ function convertCommentListToBlocks(commentList: any[]) {
     // 添加回复
     if (comment.replies && comment.replies.length > 0) {
       comment.replies.forEach((reply: any) => {
-        const replyText = `  ↳ R${reply.no} ${reply.content} | ⏰ ${reply.time} | ❤️ ${reply.likes}`
+        const replyText = `  ↳ R${reply.no} ${reply.comment} | ⏰ ${reply.published_at} | ❤️ ${reply.likes}`
         blocks.push({
           object: 'block',
           type: 'paragraph',
@@ -691,7 +1137,12 @@ async function replacePageContent(api: NotionAPI, pageId: string, children: any[
  * Notion 存储适配器
  */
 export const notionStore: StoreAdapter = {
-  async save(type: string, data: any, store: StoreConfig): Promise<SaveResult | SaveResult[]> {
+  async save(
+    type: string,
+    data: any,
+    store: StoreConfig,
+    fromTabId?: number
+  ): Promise<SaveResult | SaveResult[]> {
     // 1. 验证配置
     const token = store?.token?.trim()
     let databaseId = (store?.databaseId || '').replace(/\s/g, '')
@@ -712,13 +1163,15 @@ export const notionStore: StoreAdapter = {
       return { ok: false, error: `Notion 适配器不支持数据类型: ${type}` }
     }
 
-    // 3. 初始化 API（按需 ensureSchema）
+    // 3. 初始化 API
     const dbId = databaseId
     let fieldMap = await getFieldMap(dbId, type)
     const api = new NotionAPI(token, dbId, { ...fieldMap })
 
+    // 首次或 fieldMap 为空时执行 ensureSchema
     const initialized = await isInitialized(dbId, type)
     if (!initialized || Object.keys(fieldMap).length === 0) {
+      showPanelTip('正在检查/初始化数据库字段...', fromTabId)
       await api.ensureSchema(schema, async (m) => {
         fieldMap = m
         await saveFieldMap(dbId, type, m)
@@ -727,15 +1180,37 @@ export const notionStore: StoreAdapter = {
       api.fieldNameMap = fieldMap
     }
 
-    // 4. 根据 type 调用对应的存储方法
-    if (type === 'note') {
-      return await saveXhsNoteToNotion(data as XiaohongshuNote, schema, api, dbId, type)
-    } else if (type === 'account') {
-      return await saveXhsAccountToNotion(data as XiaohongshuAccount, schema, api, dbId, type)
-    } else if (type === 'feed') {
-      return await saveXhsFeedToNotion(data as XiaohongshuNote[], schema, api)
+    // 4. 执行保存，若因缺少字段报错则同步 schema 后重试一次
+    const doSave = async () => {
+      if (type === CollectionType.XHSNoteDetail) {
+        return await saveXhsNoteToNotion(data as XiaohongshuNote, schema, api, dbId, type, fromTabId)
+      }
+      if (type === CollectionType.XHSAccount) {
+        return await saveXhsAccountToNotion(data as XiaohongshuAccount, schema, api, dbId, type, fromTabId)
+      }
+      if (type === CollectionType.XHSFeed) {
+        return await saveXhsFeedToNotion(data as XiaohongshuNote[], schema, api, fromTabId)
+      }
+      if (type === CollectionType.WechatArticle) {
+        const items = Array.isArray(data) ? (data as WechatArticle[]) : [data as WechatArticle]
+        return await saveWechatArticlesToNotion(items, schema, api, dbId, type, fromTabId)
+      }
+      return { ok: false, error: '未实现的数据类型' }
     }
 
-    return { ok: false, error: '未实现的数据类型' }
+    try {
+      return await doSave()
+    } catch (e: any) {
+      if (isMissingPropertyError(e)) {
+        showPanelTip('检测到缺少字段，正在同步数据库...', fromTabId)
+        api.schemaCache = null
+        await api.ensureSchema(schema, async (m) => {
+          await saveFieldMap(dbId, type, m)
+        })
+        api.fieldNameMap = await getFieldMap(dbId, type)
+        return await doSave()
+      }
+      throw e
+    }
   }
 }

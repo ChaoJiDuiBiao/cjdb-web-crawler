@@ -1,4 +1,27 @@
 import type { StoreAdapter, StoreConfig, SaveResult } from '@/types'
+import type { CollectionType } from '@/types'
+import { MessageTypes } from '@/types'
+import { browser } from 'wxt/browser'
+
+/**
+ * 中转：将采集数据转发到 Background
+ * @param collectionType - 采集数据类型
+ * @param data - 采集数据
+ * @param storeCfg - 可选，传入时优先使用，否则 background 从 storage 读取
+ * @param fromTabId - 可选，调用方所在 tab，供 showPanelTip 使用
+ */
+export function storeCrawlData(
+  collectionType: CollectionType,
+  data: any,
+  storeCfg?: StoreConfig,
+  fromTabId?: number
+): Promise<SaveResult | SaveResult[]> {
+  console.log('[CJDB] storeCrawlData Dispatch:', collectionType, !!storeCfg, fromTabId)
+  return browser.runtime.sendMessage({
+    type: MessageTypes.StoreCrawlData,
+    payload: { collectionType, data, storeCfg, fromTabId }
+  })
+}
 
 /**
  * Store - 数据存储统一入口
@@ -30,26 +53,30 @@ export class Store {
 
   /**
    * 存储数据
-   * @param type - 数据类型 'note' | 'feed' | 'account'
+   * @param type - 数据类型 CollectionType
    * @param data - 单条数据或批量数据数组
-   * @param storeConfig - 存储配置
+   * @param storeCfg - 可选，传入则用，否则从 storage 读取当前配置
+   * @param fromTabId - 可选，供 showPanelTip 推送进度到指定 tab
    * @returns 保存结果
    */
   async save(
-    type: string,
+    type: CollectionType,
     data: any,
-    storeConfig: StoreConfig
+    storeCfg?: StoreConfig,
+    fromTabId?: number
   ): Promise<SaveResult | SaveResult[]> {
-    const adapter = this.adapters.get(storeConfig.type)
+    const { getCurrentStoreFromStorage } = await import('@/config/StoreConfig')
+    const cfg = storeCfg ?? (await getCurrentStoreFromStorage(type))
 
+    const adapter = this.adapters.get(cfg.type)
     if (!adapter) {
-      const error = `未知存储类型: ${storeConfig.type}`
+      const error = `未知存储类型: ${cfg.type}`
       console.error('[Store]', error)
       return { ok: false, error }
     }
 
     try {
-      return await adapter.save(type, data, storeConfig)
+      return await adapter.save(type, data, cfg, fromTabId)
     } catch (error: any) {
       console.error('[Store] 保存失败:', error)
       return { ok: false, error: error.message || String(error) }

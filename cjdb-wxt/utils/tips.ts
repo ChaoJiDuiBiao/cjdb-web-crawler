@@ -1,12 +1,12 @@
 /**
- * 通用进度提示
- * - Content Script：直接调用 window.CJDB_TipsDisplay
- * - Background：通过 sendMessage 推送给 Content，由 listener 调用 CJDB_TipsDisplay
+ * 进度提示
+ * - showPanelTip: Background 通过 tabs.sendMessage 推送到指定 tab 的 Content，由 listener 调用 CJDB_TipsDisplay
  */
-export function tryShowTip(msg: string, ..._args: unknown[]) {
-  if (typeof window !== 'undefined') {
-    ;(window as any).CJDB_TipsDisplay?.(msg, ..._args)
-  } else {
-    browser.runtime.sendMessage({ type: 'cjdb-tips-display', message: msg }).catch(() => {})
-  }
+import { MessageTypes } from '@/types'
+
+export function showPanelTip(msg: string, tabId?: number) {
+  if (tabId == null) return
+  browser.tabs
+    .sendMessage(tabId, { type: MessageTypes.ShowPanelTip, message: msg })
+    .catch(() => {})
 }

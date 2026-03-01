@@ -13,31 +13,40 @@ import { createApp } from 'vue'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import CollectPanel from '@/components/CollectPanel.vue'
+import { MessageTypes } from '@/types'
 import { XiaohongshuNoteCrawler } from '@/crawlers/XiaohongshuNoteCrawler'
 import { XiaohongshuFeedCrawler } from '@/crawlers/XiaohongshuFeedCrawler'
 import { XiaohongshuAccountCrawler } from '@/crawlers/XiaohongshuAccountCrawler'
+import { WechatArticleContentCrawler } from '@/crawlers/WechatArticleContentCrawler'
+import { WechatArticleDataCrawler } from '@/crawlers/WechatArticleDataCrawler'
+import { WechatAccountHistoryCrawler } from '@/crawlers/WechatAccountHistoryCrawler'
 
 export default defineContentScript({
-  matches: ['https://www.xiaohongshu.com/*', 'https://xhslink.com/*'],
+  matches: ['https://www.xiaohongshu.com/*', 'https://xhslink.com/*', 'https://mp.weixin.qq.com/*'],
 
   main() {
     console.log('[CJDB] Content script loaded')
 
-    // 创建所有 Crawler
+    // 创建所有 Crawler（顺序影响多匹配时默认选中）
     const crawlers = [
       new XiaohongshuNoteCrawler(),
       new XiaohongshuFeedCrawler(),
-      new XiaohongshuAccountCrawler()
+      new XiaohongshuAccountCrawler(),
+      new WechatArticleContentCrawler(),
+      new WechatArticleDataCrawler(),
+      new WechatAccountHistoryCrawler()
     ]
 
-    let currentCrawler: typeof crawlers[number] | null = null
+    let currentCrawlers: typeof crawlers = []
+    let currentCrawler: (typeof crawlers)[number] | null = null
 
     // 识别并激活对应的 Crawler
     function checkAndInit() {
       const url = location.href
 
-      // 找到能处理当前 URL 的 Crawler
-      const crawler = crawlers.find(c => c.canHandle(url))
+      // 找到能处理当前 URL 的所有 Crawler
+      const crawlersMatch = crawlers.filter((c) => c.canHandle(url))
+      const crawler = crawlersMatch[0] ?? null
 
       if (!crawler) {
         console.log('[CJDB] 未找到匹配的 Crawler')
@@ -45,24 +54,52 @@ export default defineContentScript({
       }
 
       // 如果 Crawler 切换了，重新挂载 UI
-      if (crawler !== currentCrawler) {
+      const crawlersChanged =
+        crawlersMatch.length !== currentCrawlers.length ||
+        crawlersMatch.some((c, i) => c !== currentCrawlers[i])
+
+      if (crawlersChanged) {
+        currentCrawlers = crawlersMatch
         currentCrawler = crawler
 
-        // 清理旧面板
-        const oldRoot = document.getElementById('cjdb-panel-root')
-        if (oldRoot) oldRoot.remove()
+        // 清理旧面板（兼容直接挂载与 Shadow DOM 挂载）
+        const oldHost = document.getElementById('cjdb-panel-host')
+        if (oldHost) oldHost.remove()
 
-        // 注入新面板
+        // Shadow DOM 隔离页面 CSS，避免公众号等页面的全局样式污染 el-dialog、el-form
+        const host = document.createElement('div')
+        host.id = 'cjdb-panel-host'
+        const shadow = host.attachShadow({ mode: 'open' })
+
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = browser.runtime.getURL('content-scripts/content.css')
+        shadow.appendChild(link)
+
         const root = document.createElement('div')
         root.id = 'cjdb-panel-root'
-        document.body.appendChild(root)
+        shadow.appendChild(root)
 
-        // 挂载 Vue 应用，传递 crawler
-        const app = createApp(CollectPanel, { crawler: currentCrawler })
+        document.body.appendChild(host)
+
+        const isWeixin = /mp\.weixin\.qq\.com/.test(location.href)
+        const wechatHistoryCrawler = isWeixin ? crawlers.find((c) => c.constructor?.name === 'WechatAccountHistoryCrawler') ?? null : null
+        const app = createApp(CollectPanel, {
+          crawlers: currentCrawlers,
+          wechatHistoryCrawler
+        })
         app.use(ElementPlus)
-        app.mount(root)
 
-        console.log('[CJDB] Panel mounted with crawler:', crawler.constructor.name)
+        let mounted = false
+        const mountApp = () => {
+          if (mounted) return
+          mounted = true
+          app.mount(root)
+        }
+        link.addEventListener('load', mountApp)
+        setTimeout(mountApp, 500)
+
+        console.log('[CJDB] Panel mounted with crawlers:', currentCrawlers.map((c) => c.constructor.name))
       }
 
       // 运行 marker
@@ -88,17 +125,18 @@ export default defineContentScript({
     const runMarker = () => {
       if (markerTimer) clearTimeout(markerTimer)
       markerTimer = setTimeout(() => {
-        if (currentCrawler && currentCrawler.canHandle(location.href)) {
-          currentCrawler.marker()
+        const match = crawlers.find((c) => c.canHandle(location.href))
+        if (match) {
+          match.marker()
         }
       }, 300)
     }
 
     window.addEventListener('scroll', runMarker, { passive: true })
 
-    // 接收 Background 发来的进度提示，调用 Panel 的 tipsDisplay
-    browser.runtime.onMessage.addListener((msg: { type?: string; message?: string }) => {
-      if (msg.type === 'cjdb-tips-display' && msg.message) {
+    // 接收 Background 发来的进度提示（showPanelTip 经 tabs.sendMessage 发送），调用 Panel 的 tipsDisplay
+    browser.runtime.onMessage.addListener((msg: { type?: string; message?: string, tabId?: number }) => {
+      if (msg.type === MessageTypes.ShowPanelTip) {
         ;(window as any).CJDB_TipsDisplay?.(msg.message)
       }
     })

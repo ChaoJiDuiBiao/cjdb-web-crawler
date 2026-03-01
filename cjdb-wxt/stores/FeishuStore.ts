@@ -1,4 +1,4 @@
-import type { StoreAdapter, StoreConfig, SaveResult } from '@/types'
+import type { StoreAdapter, StoreConfig, SaveResult, CollectionType } from '@/types'
 
 /**
  * FeishuStore - 飞书多维表格存储适配器
@@ -11,7 +11,7 @@ import type { StoreAdapter, StoreConfig, SaveResult } from '@/types'
  * 4. 实现数据映射和字段创建
  */
 export const feishuStore: StoreAdapter = {
-  async save(type: string, data: any, store: StoreConfig): Promise<SaveResult> {
+  async save(type: CollectionType, data: any, store: StoreConfig, _fromTabId?: number): Promise<SaveResult> {
     console.warn('[FeishuStore] 待实现', type, data, store)
     return { ok: false, error: '飞书存储待实现' }
   }
