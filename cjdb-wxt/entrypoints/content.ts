@@ -17,8 +17,7 @@ import { MessageTypes } from '@/types'
 import { XiaohongshuNoteCrawler } from '@/crawlers/XiaohongshuNoteCrawler'
 import { XiaohongshuFeedCrawler } from '@/crawlers/XiaohongshuFeedCrawler'
 import { XiaohongshuAccountCrawler } from '@/crawlers/XiaohongshuAccountCrawler'
-import { WechatArticleContentCrawler } from '@/crawlers/WechatArticleContentCrawler'
-import { WechatArticleDataCrawler } from '@/crawlers/WechatArticleDataCrawler'
+import { WechatArticleCrawler } from '@/crawlers/WechatArticleCrawler'
 import { WechatAccountHistoryCrawler } from '@/crawlers/WechatAccountHistoryCrawler'
 
 export default defineContentScript({
@@ -32,8 +31,7 @@ export default defineContentScript({
       new XiaohongshuNoteCrawler(),
       new XiaohongshuFeedCrawler(),
       new XiaohongshuAccountCrawler(),
-      new WechatArticleContentCrawler(),
-      new WechatArticleDataCrawler(),
+      new WechatArticleCrawler(),
       new WechatAccountHistoryCrawler()
     ]
 
@@ -82,11 +80,8 @@ export default defineContentScript({
 
         document.body.appendChild(host)
 
-        const isWeixin = /mp\.weixin\.qq\.com/.test(location.href)
-        const wechatHistoryCrawler = isWeixin ? crawlers.find((c) => c.constructor?.name === 'WechatAccountHistoryCrawler') ?? null : null
         const app = createApp(CollectPanel, {
-          crawlers: currentCrawlers,
-          wechatHistoryCrawler
+          crawlers: currentCrawlers
         })
         app.use(ElementPlus)
 

@@ -1,0 +1,10 @@
+.DS_Store
+.wxt
+output
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+.idea
+.vscode

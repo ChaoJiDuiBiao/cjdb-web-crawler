@@ -4,6 +4,8 @@ import { showPanelTip } from '@/utils/tips'
 
 const NOTION_VERSION = '2022-06-28'
 const NOTION_MARKDOWN_VERSION = '2025-09-03'
+const NOTION_FILE_MAX_SIZE = 20 * 1024 * 1024
+const IMAGE_FETCH_TIMEOUT_MS = 20000
 
 // 笔记详情页 Schema（完整数据）
 const NOTE_SCHEMA = {
@@ -12,6 +14,7 @@ const NOTE_SCHEMA = {
   '发布时间': { type: 'date', notionType: { date: {} } },
   '发布地点': { type: 'rich_text', notionType: { rich_text: {} } },
   '正文': { type: 'rich_text', notionType: { rich_text: {} } },
+  '封面': { type: 'files', notionType: { files: {} } },
   '图片': { type: 'files', notionType: { files: {} } },
   '标签': { type: 'multi_select', notionType: { multi_select: {} } },
   '点赞量': { type: 'number', notionType: { number: { format: 'number' } } },
@@ -22,14 +25,10 @@ const NOTE_SCHEMA = {
   '采集时间': { type: 'date', notionType: { date: {} } }
 }
 
-// 发现页 Schema（卡片数据）
+// 搜索任务 Schema（一次采集一条记录）
 const FEED_SCHEMA = {
   '标题': { type: 'title', notionType: { title: {} } },
-  'URL': { type: 'url', notionType: { url: {} }, unique: true },
-  '封面': { type: 'files', notionType: { files: {} } },
-  '点赞量': { type: 'number', notionType: { number: { format: 'number' } } },
-  '收藏量': { type: 'number', notionType: { number: { format: 'number' } } },
-  '评论量': { type: 'number', notionType: { number: { format: 'number' } } },
+  '数量': { type: 'number', notionType: { number: { format: 'number' } } },
   '采集时间': { type: 'date', notionType: { date: {} } }
 }
 
@@ -111,6 +110,90 @@ async function markInitialized(dbId: string, type: string) {
   await browser.storage.local.set({ [initFlagKey(dbId, type)]: true })
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function extFromContentType(contentType: string): string {
+  const map: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/heic': 'heic',
+    'image/heif': 'heif'
+  }
+  return map[String(contentType || '').toLowerCase()] || 'jpg'
+}
+
+function toSafeFilename(name: string, fallback: string): string {
+  const cleaned = String(name || '')
+    .replace(/[?#].*$/, '')
+    .replace(/[^\w.\-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  return cleaned || fallback
+}
+
+function inferFilenameFromUrl(url: string, index: number, contentType = ''): string {
+  const fallback = `image-${index + 1}.${extFromContentType(contentType)}`
+  try {
+    const u = new URL(url)
+    const raw = decodeURIComponent(u.pathname.split('/').pop() || '')
+    const name = toSafeFilename(raw, fallback)
+    if (/\.\w{2,5}$/.test(name)) return name
+    return `${name}.${extFromContentType(contentType)}`
+  } catch {
+    return fallback
+  }
+}
+
+function normalizeFileUrls(value: unknown): string[] {
+  const out: string[] = []
+  const append = (v: unknown) => {
+    if (typeof v !== 'string') return
+    const parts = v.split(',').map((s) => s.trim()).filter(Boolean)
+    for (const p of parts) out.push(p)
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach(append)
+  } else {
+    append(value)
+  }
+
+  return Array.from(new Set(out))
+}
+
+async function downloadImageBlob(url: string): Promise<{ blob: Blob; contentType: string }> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS)
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'image/*,*/*;q=0.8' },
+      referrer: 'https://www.xiaohongshu.com/',
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      signal: controller.signal
+    })
+
+    if (!response.ok) {
+      throw new Error(`下载失败: ${response.status}`)
+    }
+
+    const blob = await response.blob()
+    if (!blob || blob.size <= 0) {
+      throw new Error('下载为空文件')
+    }
+
+    const contentType = response.headers.get('content-type') || blob.type || 'image/jpeg'
+    return { blob, contentType }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 class NotionAPI {
   apiKey: string
   databaseId: string
@@ -123,29 +206,53 @@ class NotionAPI {
     this.fieldNameMap = fieldNameMap || {}
   }
 
-  async request(method: string, endpoint: string, data: any = null) {
+  private async requestWithOptions(
+    method: string,
+    endpoint: string,
+    data: any = null,
+    version: string = NOTION_VERSION,
+    extraHeaders: Record<string, string> = {}
+  ) {
     const url = `https://api.notion.com/v1${endpoint}`
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${this.apiKey}`,
+      'Notion-Version': version,
+      ...extraHeaders
+    }
     const options: RequestInit = {
       method,
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-        'Notion-Version': NOTION_VERSION
+      headers
+    }
+
+    if (data != null) {
+      if (typeof FormData !== 'undefined' && data instanceof FormData) {
+        options.body = data
+      } else {
+        headers['Content-Type'] = 'application/json'
+        options.body = JSON.stringify(data)
       }
     }
 
-    if (data) {
-      options.body = JSON.stringify(data)
+    const response = await fetch(url, options)
+    const raw = await response.text()
+    let result: any = {}
+    if (raw) {
+      try {
+        result = JSON.parse(raw)
+      } catch {
+        result = { message: raw }
+      }
     }
 
-    const response = await fetch(url, options)
-    const result = await response.json()
-
     if (!response.ok) {
-      throw new Error(result.message || `Notion API error: ${response.status}`)
+      throw new Error(result?.message || `Notion API error: ${response.status}`)
     }
 
     return result
+  }
+
+  async request(method: string, endpoint: string, data: any = null) {
+    return this.requestWithOptions(method, endpoint, data, NOTION_VERSION)
   }
 
   async getDatabase() {
@@ -206,29 +313,55 @@ class NotionAPI {
     return result
   }
 
-  async requestWithVersion(method: string, endpoint: string, data: any = null, version: string = NOTION_VERSION) {
-    const url = `https://api.notion.com/v1${endpoint}`
-    const options: RequestInit = {
-      method,
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-        'Notion-Version': version
+  async requestWithVersion(
+    method: string,
+    endpoint: string,
+    data: any = null,
+    version: string = NOTION_VERSION,
+    extraHeaders: Record<string, string> = {}
+  ) {
+    return this.requestWithOptions(method, endpoint, data, version, extraHeaders)
+  }
+
+  async createFileUpload(filename: string, contentType: string, contentLength: number) {
+    return this.requestWithVersion(
+      'POST',
+      '/file_uploads',
+      { mode: 'single_part', filename, content_type: contentType, content_length: contentLength },
+      NOTION_MARKDOWN_VERSION
+    )
+  }
+
+  async sendFileUpload(fileUploadId: string, fileBlob: Blob, filename: string) {
+    const form = new FormData()
+    form.append('file', fileBlob, filename)
+    return this.requestWithVersion('POST', `/file_uploads/${fileUploadId}/send`, form, NOTION_MARKDOWN_VERSION)
+  }
+
+  async retrieveFileUpload(fileUploadId: string) {
+    return this.requestWithVersion('GET', `/file_uploads/${fileUploadId}`, null, NOTION_MARKDOWN_VERSION)
+  }
+
+  async uploadFileBlobToNotion(fileBlob: Blob, filename: string, contentType: string) {
+    const created = await this.createFileUpload(filename, contentType, fileBlob.size)
+    const fileUploadId = created?.id
+    if (!fileUploadId) {
+      throw new Error('Notion file_upload 创建失败')
+    }
+
+    await this.sendFileUpload(fileUploadId, fileBlob, filename)
+
+    for (let i = 0; i < 12; i++) {
+      const result = await this.retrieveFileUpload(fileUploadId)
+      const status = String(result?.status || '').toLowerCase()
+      if (status === 'uploaded') return fileUploadId
+      if (status === 'failed' || status === 'expired') {
+        throw new Error(`Notion file_upload 状态异常: ${status}`)
       }
+      await sleep(1000)
     }
 
-    if (data) {
-      options.body = JSON.stringify(data)
-    }
-
-    const response = await fetch(url, options)
-    const result = await response.json()
-
-    if (!response.ok) {
-      throw new Error(result.message || `Notion API error: ${response.status}`)
-    }
-
-    return result
+    throw new Error('Notion file_upload 上传超时')
   }
 
   async updatePage(pageId: string, properties: any) {
@@ -325,7 +458,13 @@ class NotionAPI {
   }
 }
 
-function toNotionProperties(raw: any, schema: any, fieldNameMap: Record<string, string>, isUpdate = false) {
+async function toNotionProperties(
+  raw: any,
+  schema: any,
+  fieldNameMap: Record<string, string>,
+  api: NotionAPI,
+  isUpdate = false
+) {
   const now = new Date().toISOString().split('T')[0]
 
   // 根据 schema 判断数据类型
@@ -339,6 +478,7 @@ function toNotionProperties(raw: any, schema: any, fieldNameMap: Record<string, 
     publishTimeStr: '发布时间',
     location: '发布地点',
     content: '正文',
+    coverUrl: '封面',
     imageUrls: '图片',
     tags: '标签',
     likes: '点赞量',
@@ -348,7 +488,7 @@ function toNotionProperties(raw: any, schema: any, fieldNameMap: Record<string, 
     authorLikes: '作者获赞与收藏数'
   }
 
-  // 卡片数据字段映射（发现页）
+  // 卡片数据字段映射（搜索结果）
   const cardFieldMap: Record<string, string> = {
     title: '标题',
     url: 'URL',
@@ -437,9 +577,28 @@ function toNotionProperties(raw: any, schema: any, fieldNameMap: Record<string, 
       const text = typeof value === 'string' ? value : (value && typeof value === 'object' ? '' : String(value || ''))
       propValue = { rich_text: [{ text: { content: text.slice(0, 2000) } }] }
     } else if (config.type === 'files') {
-      const arr = Array.isArray(value) ? value : (typeof value === 'string' && value ? [value] : [])
-      propValue = {
-        files: arr.map((u) => ({ type: 'external', name: 'image', external: { url: u } }))
+      const urls = normalizeFileUrls(value)
+      if (urls.length === 0) {
+        propValue = null
+      } else {
+        const files: any[] = []
+        for (let i = 0; i < urls.length; i++) {
+          const url = urls[i]
+          try {
+            const { blob, contentType } = await downloadImageBlob(url)
+            if (blob.size > NOTION_FILE_MAX_SIZE) {
+              throw new Error(`图片超过 20MB，当前 ${(blob.size / (1024 * 1024)).toFixed(2)}MB`)
+            }
+            const filename = inferFilenameFromUrl(url, i, contentType)
+            const fileUploadId = await api.uploadFileBlobToNotion(blob, filename, contentType)
+            files.push({ type: 'file_upload', name: filename, file_upload: { id: fileUploadId } })
+          } catch (e: any) {
+            const fallbackName = inferFilenameFromUrl(url, i)
+            console.warn('[Notion] 图片上传失败，回退 external:', url, e?.message || e)
+            files.push({ type: 'external', name: fallbackName, external: { url } })
+          }
+        }
+        propValue = { files }
       }
     } else if (config.type === 'select') {
       const s = typeof value === 'string' ? value.trim() : ''
@@ -513,7 +672,7 @@ async function saveXhsNoteToNotion(
 
       showPanelTip('正在查询是否已存在该笔记...', fromTabId)
       const existing = await api.findByUniqueField(schema, 'URL', url)
-      const props = toNotionProperties(data, schema, api.fieldNameMap, !!existing)
+      const props = await toNotionProperties(data, schema, api.fieldNameMap, api, !!existing)
 
       // 转换 commentList 为 blocks
       const children = data.commentList ? convertCommentListToBlocks(data.commentList) : null
@@ -549,92 +708,38 @@ async function saveXhsNoteToNotion(
   return { ok: false, error: errMsg }
 }
 
-// ==================== 发现页存储（批量，优化去重） ====================
+// ==================== 搜索页存储（一次搜索一条记录） ====================
 async function saveXhsFeedToNotion(
   data: XiaohongshuNote[],
   schema: any,
   api: NotionAPI,
   fromTabId?: number
-): Promise<SaveResult[]> {
+): Promise<SaveResult> {
   const items = Array.isArray(data) ? data : [data]
-  if (items.length === 0) return []
+  if (items.length === 0) return { ok: false, error: '暂无搜索结果可保存' }
 
-  showPanelTip(`正在准备保存 ${items.length} 条笔记...`, fromTabId)
-  console.log(`[Notion] 批量保存发现页 ${items.length} 条`)
+  const keyword = (items.find((it) => it?.searchKeyword)?.searchKeyword || '').trim() || '未命名搜索'
+  const total = items.length
 
-  // 提取所有 URL
-  const urlMap = new Map<string, { item: XiaohongshuNote; idx: number }>()
-  items.forEach((item, idx) => {
-    const url = item?.url || (item?.noteId ? `https://www.xiaohongshu.com/explore/${item.noteId}` : '')
-    if (url) urlMap.set(url, { item, idx })
-  })
+  showPanelTip(`正在保存搜索「${keyword}」...`, fromTabId)
+  console.log(`[Notion] 保存搜索任务: keyword=${keyword}, total=${total}`)
 
-  const urls = Array.from(urlMap.keys())
-  if (urls.length === 0) {
-    return items.map(() => ({ ok: false, error: '缺少 URL' }))
+  try {
+    const props = await toNotionProperties(
+      { title: keyword, '数量': total },
+      schema,
+      api.fieldNameMap,
+      api,
+      false
+    )
+    const children = convertXhsSearchResultsToBlocks(items, keyword)
+    const result = await api.createPage(props, children)
+    return { ok: true, action: 'create', pageId: result?.id }
+  } catch (e: any) {
+    if (isMissingPropertyError(e)) throw e
+    console.error('[Notion] 保存搜索任务失败:', e)
+    return { ok: false, error: parseNotionError(e) }
   }
-
-  // 批量查询已存在的（每次 10 个）
-  const totalBatches = Math.ceil(urls.length / 10)
-  const existingMap = new Map<string, string>()
-  for (let i = 0; i < urls.length; i += 10) {
-    const batchNum = Math.floor(i / 10) + 1
-    showPanelTip(`正在检查重复 (${batchNum}/${totalBatches})...`, fromTabId)
-    const batch = urls.slice(i, i + 10)
-    const actualFieldName = api.fieldNameMap['URL'] || 'URL'
-    const orFilters = batch.map(url => ({ property: actualFieldName, url: { equals: url } }))
-    try {
-      const result = await api.queryDatabase({ or: orFilters })
-      ;(result?.results || []).forEach((page: any) => {
-        const urlProp = page.properties?.[actualFieldName]
-        const url = urlProp?.url
-        if (url) existingMap.set(url, page.id)
-      })
-    } catch (e) {
-      console.warn(`[Notion] 批量查询失败:`, e)
-    }
-  }
-
-  console.log(`[Notion] ${existingMap.size} 条已存在, ${urls.length - existingMap.size} 条需创建`)
-
-  const toCreateCount = urls.length - existingMap.size
-  if (toCreateCount > 0) {
-    showPanelTip(`共有 ${toCreateCount} 条新笔记待写入...`, fromTabId)
-  }
-
-  // 分类
-  const results: SaveResult[] = new Array(items.length)
-  const toCreate: Array<{ item: XiaohongshuNote; idx: number; url: string }> = []
-  urlMap.forEach(({ item, idx }, url) => {
-    if (existingMap.has(url)) {
-      results[idx] = { ok: true, action: 'skip', pageId: existingMap.get(url) }
-    } else {
-      toCreate.push({ item, idx, url })
-    }
-  })
-
-  // 并发创建（3 并发，避免 rate limit）
-  for (let i = 0; i < toCreate.length; i += 3) {
-    const done = Math.min(i + 3, toCreate.length)
-    showPanelTip(`正在写入第 ${done}/${toCreate.length} 条...`, fromTabId)
-    const batch = toCreate.slice(i, i + 3)
-    await Promise.all(batch.map(async ({ item, idx, url }) => {
-      try {
-        const props = toNotionProperties(item, schema, api.fieldNameMap, false)
-        const result = await api.createPage(props)
-        results[idx] = { ok: true, action: 'create', pageId: result?.id }
-      } catch (e: any) {
-        if (isMissingPropertyError(e)) throw e
-        console.error(`[Notion] 创建失败 (${url}):`, e)
-        results[idx] = { ok: false, error: parseNotionError(e) }
-      }
-    }))
-    if (i + 3 < toCreate.length) {
-      await new Promise(r => setTimeout(r, 350)) // 避免 rate limit
-    }
-  }
-
-  return results
 }
 
 // ==================== 公众号文章存储（统一入口，内部按需分批） ====================
@@ -702,7 +807,7 @@ async function saveWechatArticlesToNotion(
     await Promise.all(
       batch.map(async ({ item, idx, pageId }) => {
         try {
-          const props = toNotionProperties(item, schema, api.fieldNameMap, true)
+          const props = await toNotionProperties(item, schema, api.fieldNameMap, api, true)
           await api.updatePage(pageId, props)
           const markdown = convertWechatContentToMarkdown(item)
           if (markdown) {
@@ -730,7 +835,7 @@ async function saveWechatArticlesToNotion(
     await Promise.all(
       batch.map(async ({ item, idx }) => {
         try {
-          const props = toNotionProperties(item, schema, api.fieldNameMap, false)
+          const props = await toNotionProperties(item, schema, api.fieldNameMap, api, false)
           const markdown = convertWechatContentToMarkdown(item)
           const result = await api.createPage(props, null, markdown || undefined)
           results[idx] = { ok: true, action: 'create', pageId: result?.id }
@@ -777,7 +882,7 @@ async function saveXhsAccountToNotion(
 
       showPanelTip('正在查询是否已存在该账号...', fromTabId)
       const existing = await api.findByUniqueField(schema, '账号ID', userId)
-      const props = toNotionProperties(data, schema, api.fieldNameMap, !!existing)
+      const props = await toNotionProperties(data, schema, api.fieldNameMap, api, !!existing)
 
       // 转换 noteListText 为 blocks
       const children = data.noteListText ? convertNoteListToBlocks(data.noteListText) : null
@@ -1008,6 +1113,55 @@ function convertNoteListToBlocks(noteListText: string) {
   })
 
   console.log(`[Notion] 转换笔记列表为 ${blocks.length} 个 blocks`)
+  return blocks
+}
+
+// ==================== 辅助函数：转换搜索结果为 blocks ====================
+function convertXhsSearchResultsToBlocks(items: XiaohongshuNote[], keyword: string) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return []
+  }
+
+  const blocks: any[] = []
+
+  blocks.push({
+    object: 'block',
+    type: 'heading_2',
+    heading_2: {
+      rich_text: [{ type: 'text', text: { content: '搜索结果' } }]
+    }
+  })
+
+  blocks.push({
+    object: 'block',
+    type: 'paragraph',
+    paragraph: {
+      rich_text: [{
+        type: 'text',
+        text: { content: `关键词：${keyword || '-'}\n数量：${items.length}`.slice(0, NOTION_TEXT_MAX) }
+      }]
+    }
+  })
+
+  items.forEach((item, idx) => {
+    const line = [
+      `#${idx + 1} 标题：${item.title || '未知'}`,
+      `作者昵称：${item.authorNickname || '-'}`,
+      `点赞：${item.likes ?? 0}`,
+      `封面：${item.coverUrl || '-'}`,
+      `URL：${item.url || '-'}`
+    ].join('\n')
+
+    blocks.push({
+      object: 'block',
+      type: 'paragraph',
+      paragraph: {
+        rich_text: [{ type: 'text', text: { content: line.slice(0, NOTION_TEXT_MAX) } }]
+      }
+    })
+  })
+
+  console.log(`[Notion] 转换搜索结果为 ${blocks.length} 个 blocks`)
   return blocks
 }
 

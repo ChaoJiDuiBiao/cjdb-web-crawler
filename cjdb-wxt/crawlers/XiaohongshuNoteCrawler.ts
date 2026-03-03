@@ -142,10 +142,12 @@ export class XiaohongshuNoteCrawler {
 
     // 图片
     const imgs = Array.from(ctx.querySelectorAll('.note-content img, .carousel img, .swiper-slide img') as NodeListOf<HTMLImageElement>)
-    const imageUrls = [...new Set(
+    const imageUrlList = [...new Set(
       imgs.map(img => img.src || img.dataset?.src)
           .filter(src => src && !src.includes('placeholder') && !src.includes('avatar'))
-    )].join(',')
+    )]
+    const coverUrl = imageUrlList[0] || null
+    const imageUrls = imageUrlList.length > 0 ? imageUrlList.join(',') : null
 
     // 标签
     const tags = new Set<string>()
@@ -241,6 +243,7 @@ export class XiaohongshuNoteCrawler {
       authorFansCount,
       authorLikes,
       authorFollowing,
+      coverUrl,
       imageUrls,
       tags: Array.from(tags),
       commentList,

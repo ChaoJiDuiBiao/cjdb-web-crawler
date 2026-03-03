@@ -8,8 +8,8 @@ import { fetchPostHistory, fetchArticleHtml, parseDajialaError } from '@/utils/d
  */
 export class WechatAccountHistoryCrawler {
   canHandle(url: string): boolean {
-    // 匹配公众号相关页面，排除文章详情页（文章页由 Content/Data crawler 处理）
-    return /mp\.weixin\.qq\.com/.test(url) && !/mp\.weixin\.qq\.com\/s/.test(url)
+    // 所有公众号页面都支持历史文章功能（包括文章页和非文章页）
+    return /mp\.weixin\.qq\.com/.test(url)
   }
 
   /** 加载历史文章列表（供 Panel 调用）。支持 name 或 url，API 可用当前文章 URL 解析公众号并拉取历史 */

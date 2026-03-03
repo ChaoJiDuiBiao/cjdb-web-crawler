@@ -194,6 +194,11 @@
             </template>
           </el-dropdown>
         </div>
+        <div class="history-options">
+          <el-checkbox v-model="historyFetchPrincipalInfo">
+            采集公众号主体信息（公司名称、地区、认证等）
+          </el-checkbox>
+        </div>
         <div class="history-table-wrapper">
           <table class="history-table">
             <thead>
@@ -303,11 +308,9 @@ import { getDajialaApiKey, setDajialaApiKey, augmentWechatArticlesWithApiData, a
 import { CollectionType, StoreType } from '@/types'
 import type { Store, XiaohongshuNote, XiaohongshuAccount, WechatArticle, WechatHistoryItem } from '@/types'
 
-// 接收 crawlers 数组（同页可多 Crawler，如公众号 内容|数据）
+// 接收 crawlers 数组（同页可多 Crawler，如公众号 文章|历史）
 const props = defineProps<{
   crawlers: any[]
-  /** 公众号历史爬虫（文章页时不在 crawlers 中，需单独传入以支持 历史文章 入口） */
-  wechatHistoryCrawler?: any
 }>()
 
 // 提示消息类型
@@ -329,7 +332,8 @@ const showRemarkDialog = ref(false)
 const remarkInputValue = ref('')
 let remarkResolve: ((value: string) => void) | null = null
 const showPreview = ref(false)
-const previewData = ref<XiaohongshuNote | XiaohongshuAccount | XiaohongshuNote[] | null>(null)
+type PreviewData = XiaohongshuNote | XiaohongshuAccount | WechatArticle | XiaohongshuNote[] | WechatArticle[] | null
+const previewData = ref<PreviewData>(null)
 const previewCollectionType = ref<CollectionType | ''>('')
 // 公众号：是否同时采集阅读量等额外数据
 const extraDataChecked = ref(false)
@@ -357,7 +361,7 @@ const collectingPhaseText = computed(() =>
 )
 
 // 按数据类型格式化预览
-function formatPreviewAccount(data: XiaohongshuAccount): string {
+function getXHSAccountPreview(data: XiaohongshuAccount): string {
   const lines = [
     `昵称: ${data.nickname || '-'}`,
     `账号ID: ${data.userId || '-'}`,
@@ -373,17 +377,18 @@ function formatPreviewAccount(data: XiaohongshuAccount): string {
   return lines.join('\n')
 }
 
-function formatPreviewFeed(data: XiaohongshuNote[]): string {
+function getXHSFeedPreview(data: XiaohongshuNote[]): string {
   const total = data.length
-  const lines = [`共 ${total} 条笔记`, '---']
+  const keyword = data.find((item) => item.searchKeyword)?.searchKeyword || '-'
+  const lines = [`关键词: ${keyword}`, `共 ${total} 条结果`, '---']
   data.slice(0, 20).forEach((item, i) => {
-    lines.push(`${i + 1}. ${(item.title || '未知').slice(0, 40)} | ❤️${item.likes ?? 0}`)
+    lines.push(`${i + 1}. ${(item.title || '未知').slice(0, 40)} | ❤️${item.likes ?? 0} | 👤${item.authorNickname || '-'}`)
   })
   if (total > 20) lines.push(`... 其余 ${total - 20} 条`)
   return lines.join('\n')
 }
 
-function formatPreviewWechatArticle(data: WechatArticle): string {
+function getWeChatArticlePreview(data: WechatArticle): string {
   const lines = [
     `标题: ${(data.title || '-').slice(0, 80)}`,
     `URL: ${data.url || '-'}`,
@@ -397,7 +402,7 @@ function formatPreviewWechatArticle(data: WechatArticle): string {
   return lines.join('\n')
 }
 
-function formatPreviewWechatArticleList(data: WechatArticle[]): string {
+function getWeChatArticleListPreview(data: WechatArticle[]): string {
   const total = data.length
   const mpNickname = data[0]?.principalInfo?.nickname || ''
   const lines = [
@@ -411,10 +416,11 @@ function formatPreviewWechatArticleList(data: WechatArticle[]): string {
   return lines.join('\n')
 }
 
-function formatPreviewNote(data: XiaohongshuNote): string {
+function getXHSNoteDetailPreview(data: XiaohongshuNote): string {
   const lines = [
     `标题: ${(data.title || '-').slice(0, 80)}`,
     `URL: ${data.url || '-'}`,
+    `封面: ${data.coverUrl || '-'}`,
     `作者: ${data.authorNickname || '-'} | 粉丝: ${data.authorFansCount ?? '-'} | 获赞: ${data.authorLikes ?? '-'}`,
     `发布时间: ${data.publishTimeStr || '-'} | 地点: ${data.location || '-'}`,
     `点赞: ${data.likes ?? '-'} | 收藏: ${data.favorites ?? '-'} | 评论: ${data.comments ?? '-'}`,
@@ -432,18 +438,40 @@ function formatPreviewNote(data: XiaohongshuNote): string {
   return lines.join('\n')
 }
 
+function getPreview(collectionType: CollectionType | '', data: PreviewData): string {
+  if (!data) return ''
+
+  if (collectionType === CollectionType.XHSAccount) {
+    return getXHSAccountPreview(data as XiaohongshuAccount)
+  }
+
+  if (collectionType === CollectionType.XHSFeed) {
+    if (Array.isArray(data)) return getXHSFeedPreview(data as XiaohongshuNote[])
+    return getXHSNoteDetailPreview(data as XiaohongshuNote)
+  }
+
+  if (collectionType === CollectionType.XHSNoteDetail) {
+    if (Array.isArray(data)) return getXHSFeedPreview(data as XiaohongshuNote[])
+    return getXHSNoteDetailPreview(data as XiaohongshuNote)
+  }
+
+  if (collectionType === CollectionType.WechatArticle) {
+    if (Array.isArray(data)) return getWeChatArticleListPreview(data as WechatArticle[])
+    return getWeChatArticlePreview(data as WechatArticle)
+  }
+
+  // 未知类型时的兜底策略
+  if (Array.isArray(data)) return getXHSFeedPreview(data as XiaohongshuNote[])
+  if (data && typeof data === 'object' && 'userId' in data) return getXHSAccountPreview(data as XiaohongshuAccount)
+  return getXHSNoteDetailPreview(data as XiaohongshuNote)
+}
+
 const previewDataFormatted = computed(() => {
   const data = previewData.value
   const type = previewCollectionType.value
   if (!data) return ''
   try {
-    if (Array.isArray(data)) {
-      if (type === CollectionType.WechatArticle && Array.isArray(data)) return formatPreviewWechatArticleList(data as WechatArticle[])
-      return formatPreviewFeed(data as XiaohongshuNote[])
-    }
-    if (data && typeof data === 'object' && 'userId' in data) return formatPreviewAccount(data as XiaohongshuAccount)
-    if (data && typeof data === 'object' && ('read' in data || 'content' in data)) return formatPreviewWechatArticle(data as WechatArticle)
-    return formatPreviewNote(data as XiaohongshuNote)
+    return getPreview(type, data)
   } catch {
     return String(data)
   }
@@ -454,7 +482,7 @@ const collectTypeText = computed(() => {
   const type = currentCrawler.value?.getCrawlerState?.()?.collectionType
   if (type === CollectionType.XHSAccount) return '❇️账号'
   if (type === CollectionType.XHSNoteDetail) return '📕笔记详情'
-  if (type === CollectionType.XHSFeed) return '📋笔记列表'
+  if (type === CollectionType.XHSFeed) return '🔍搜索结果'
   if (type === CollectionType.WechatArticle) return '📰公众号'
   return ''
 })
@@ -516,9 +544,9 @@ async function saveDajialaKeyAndClose() {
   ElMessage.success('已保存')
 }
 
-// 公众号历史流程（使用 wechatHistoryCrawler 或 currentCrawler 中支持 loadHistory 的）
+// 公众号历史流程（从 crawlers 中找到支持 loadHistory 的 Crawler）
 const effectiveHistoryCrawler = computed(
-  () => props.wechatHistoryCrawler ?? (typeof currentCrawler.value?.loadHistory === 'function' ? currentCrawler.value : null)
+  () => props.crawlers.find(c => typeof c.loadHistory === 'function') ?? null
 )
 
 const showHistoryDialog = ref(false)
@@ -532,6 +560,7 @@ const historyTotalPage = ref(1)
 const historyLoadingMore = ref(false)
 const historyLoadedByUrl = ref(false)
 const historySourceUrl = ref('')
+const historyFetchPrincipalInfo = ref(false) // 全局选项：是否采集公众号主体信息
 
 const historySelectedCount = computed(() => historySelected.value.size)
 const allSelected = computed(() => {
@@ -549,6 +578,7 @@ function closeHistoryDialog() {
   historyTotalPage.value = 1
   historyLoadedByUrl.value = false
   historySourceUrl.value = ''
+  historyFetchPrincipalInfo.value = false
 }
 
 function backToInput() {
@@ -826,7 +856,7 @@ async function confirmHistoryCollect() {
       onProgress: (msg) => tipsDisplay(msg)
     })
 
-    // 2. 转换为 WechatArticle，并保留 fetchData 状态，正文采集是必须的
+    // 2. 转换为 WechatArticle，并保留 fetchData 状态
     let articles: WechatArticle[] = Array.isArray(data) ? data : [data]
     articles.forEach((article, i) => {
       const item = selectedItems[i]
@@ -835,19 +865,33 @@ async function confirmHistoryCollect() {
       }
     })
 
-    // 3. 必须采集正文
+    // 3. 从网页解析公众号名称并保存到所有文章
+    const mpNicknameEl = document.querySelector('#js_name')
+    const mpNickname = mpNicknameEl?.textContent?.trim() || ''
+    if (mpNickname) {
+      articles.forEach(article => {
+        if (!article.principalInfo) {
+          article.principalInfo = {}
+        }
+        article.principalInfo.nickname = mpNickname
+      })
+    }
+
+    // 4. 必须采集正文
     articles = await augmentWechatArticlesWithContent(articles, (msg) => tipsDisplay(msg))
 
-    // 4. 根据 fetchData 复选框状态采集数据
+    // 5. 根据 fetchData 复选框状态采集数据
     const needData = articles.some(a => a.fetchData)
     if (needData) {
       articles = await augmentWechatArticlesWithApiData(articles, (msg) => tipsDisplay(msg))
     }
 
-    // 5. 采集公众号主体信息（所有文章共用，只调用一次 API）
-    articles = await augmentWechatArticlesWithPrincipalInfo(articles, (msg) => tipsDisplay(msg))
+    // 6. 根据全局复选框状态采集公众号主体信息
+    if (historyFetchPrincipalInfo.value) {
+      articles = await augmentWechatArticlesWithPrincipalInfo(articles, (msg) => tipsDisplay(msg))
+    }
 
-    // 6. 直接保存，不预览
+    // 7. 直接保存，不预览
     const storeCfg = storeConfig.getCurrentStore(CollectionType.WechatArticle)
     if (!storeCfg || !isStoreConfigured(storeCfg)) {
       ElMessage.warning('请先配置存储源')
@@ -858,7 +902,7 @@ async function confirmHistoryCollect() {
     const result = await storeCrawlData(CollectionType.WechatArticle, articles, storeCfg)
     console.log('[CJDB] confirmHistoryCollect Result:', result)
 
-    // 7. 检查结果
+    // 8. 检查结果
     const results = Array.isArray(result) ? result : [result]
     const hasError = results.some((r) => !r.ok)
     if (hasError) {
@@ -868,12 +912,12 @@ async function confirmHistoryCollect() {
 
     clearTipMessage()
 
-    // 8. 标记已收录，不关闭弹窗
+    // 9. 标记已收录，不关闭弹窗
     selectedItems.forEach(item => {
       item.collected = true
     })
 
-    // 9. 取消选中已收录的文章
+    // 10. 取消选中已收录的文章
     const newSelected = new Set<string>()
     historySelected.value.forEach(url => {
       const item = historyItems.value.find(i => i.url === url)
@@ -1263,6 +1307,14 @@ onMounted(async () => {
   flex-direction: column;
   gap: 12px;
 }
+
+.history-options {
+  padding: 10px 12px;
+  background: #f9fafb;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
 .history-list-header {
   display: flex;
   justify-content: space-between;

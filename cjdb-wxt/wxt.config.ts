@@ -29,6 +29,9 @@ export default defineConfig({
     ],
     host_permissions: [
       'https://www.xiaohongshu.com/*',
+      'https://*.xiaohongshu.com/*',
+      'https://*.xhscdn.com/*',
+      'https://*.xhscdn.net/*',
       'https://xhslink.com/*',
       'https://mp.weixin.qq.com/*',
       'https://www.dajiala.com/*',

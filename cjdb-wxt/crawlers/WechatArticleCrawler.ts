@@ -32,10 +32,10 @@ turndownService.addRule('images', {
 turndownService.remove(['script', 'style', 'svg', 'iframe'])
 
 /**
- * 公众号文章内容爬虫
- * 功能：采集网页版正文、标题、时间、公众号名称、归属地等（DOM 解析 + HTML 转 Markdown）
+ * 公众号文章爬虫
+ * 功能：采集当前文章的正文、标题、时间、公众号名称、归属地等（DOM 解析 + HTML 转 Markdown）
  */
-export class WechatArticleContentCrawler {
+export class WechatArticleCrawler {
   canHandle(url: string): boolean {
     return /mp\.weixin\.qq\.com\/s/.test(url)
   }

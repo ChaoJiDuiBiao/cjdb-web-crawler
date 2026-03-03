@@ -8,8 +8,8 @@ interface NoteCollectionItem {
 }
 
 /**
- * 小红书发现页/搜索页爬虫
- * 功能：批量采集笔记卡片
+ * 小红书搜索页爬虫（沿用 feed 选择逻辑）
+ * 功能：批量采集搜索结果卡片
  */
 export class XiaohongshuFeedCrawler {
   noteCollection: Map<string, NoteCollectionItem> = new Map()
@@ -28,7 +28,9 @@ export class XiaohongshuFeedCrawler {
       ;(window as any).CJDB_TipsDisplay?.(msg, false)
     }
 
-    showTip('正在采集笔记列表...')
+    const searchKeyword = this.getSearchKeyword()
+
+    showTip(`正在采集搜索结果${searchKeyword ? `（${searchKeyword}）` : ''}...`)
 
     const results: XiaohongshuNote[] = []
 
@@ -38,16 +40,23 @@ export class XiaohongshuFeedCrawler {
       const noteId = url.match(/\/explore\/([\w-]+)/)?.[1] || ''
       const link = document.querySelector(`a[href*="/explore/${noteId}"]`)
       if (!link) {
-        results.push({ url, noteId, title: item.title, source: 'dom', crawledAt: new Date().toISOString() })
+        results.push({
+          url,
+          noteId,
+          searchKeyword,
+          title: item.title,
+          source: 'dom',
+          crawledAt: new Date().toISOString()
+        })
         return
       }
 
       const card = link.closest('.note-item, [class*="note-item"], [class*="note-card"], .cover') || link.parentElement || link
-      const data = this.extractFromCard(card as HTMLElement, url)
+      const data = this.extractFromCard(card as HTMLElement, url, searchKeyword)
       results.push(data)
     })
 
-    showTip(`已采集 ${results.length} 条笔记`)
+    showTip(`已采集 ${results.length} 条搜索结果`)
 
     return results
   }
@@ -76,7 +85,7 @@ export class XiaohongshuFeedCrawler {
         title: item.querySelector('.title, .note-title, [class*="title"]')?.textContent?.trim() || ''
       })
       // 每标记一条就更新提示（使用 updateKey 更新同一个 tip）
-      ;(window as any).CJDB_TipsDisplay?.(`已标记 ${this.noteCounter} 条笔记`, true, 'marker-feed')
+      ;(window as any).CJDB_TipsDisplay?.(`已标记 ${this.noteCounter} 条搜索结果`, true, 'marker-feed')
     })
 
     noteItems.forEach(item => {
@@ -156,11 +165,14 @@ export class XiaohongshuFeedCrawler {
     return ''
   }
 
-  private extractFromCard(card: HTMLElement, url: string): XiaohongshuNote {
+  private extractFromCard(card: HTMLElement, url: string, searchKeyword: string): XiaohongshuNote {
     const noteId = url.match(/\/explore\/([\w-]+)/)?.[1] || ''
     const title = card.querySelector('.title, .note-title, [class*="title"]')?.textContent?.trim() || ''
     const coverImg = card.querySelector('img') as HTMLImageElement
     const coverUrl = coverImg?.src || coverImg?.dataset?.src || ''
+    const authorNickname = card.querySelector(
+      '.author .name, .author-name, .user-name, [class*="author"] [class*="name"], [class*="user"] [class*="name"]'
+    )?.textContent?.trim() || ''
 
     const parseCount = (text: string): number => {
       const match = text.match(/(\d+\.?\d*)(k|w|万|千)?/i)
@@ -178,13 +190,32 @@ export class XiaohongshuFeedCrawler {
     return {
       url,
       noteId,
+      searchKeyword,
       title,
       likes,
+      authorNickname: authorNickname || undefined,
       coverUrl: coverUrl || undefined,
       imageUrls: coverUrl,
       source: 'dom',
       crawledAt: new Date().toISOString()
     }
+  }
+
+  private getSearchKeyword(): string {
+    const url = new URL(location.href)
+    const candidates = [
+      url.searchParams.get('keyword'),
+      url.searchParams.get('q'),
+      url.searchParams.get('query')
+    ]
+      .map(v => (v || '').trim())
+      .filter(Boolean)
+    if (candidates.length > 0) return candidates[0]
+
+    const input = document.querySelector('input[type="search"], input[placeholder*="搜索"], input[class*="search"]') as HTMLInputElement | null
+    if (input?.value?.trim()) return input.value.trim()
+
+    return document.title.replace(' - 小红书', '').trim()
   }
 
   private injectNoteMarker(item: HTMLElement, label: string, url: string, entry: NoteCollectionItem): void {

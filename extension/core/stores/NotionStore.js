@@ -358,23 +358,35 @@
         const existing = await api.findByUniqueField(schema, 'URL', url);
         const props = toNotionProperties(data, schema, api.fieldNameMap, !!existing);
 
-        // 转换 commentList 为 blocks
-        const children = data.commentList ? convertCommentListToBlocks(data.commentList) : null;
+        // 转换图片和评论为 blocks
+        const children = [];
+
+        // 添加图片 blocks
+        if (data.imageUrls && data.imageUrls.length > 0) {
+          const imageBlocks = convertImageUrlsToBlocks(data.imageUrls);
+          children.push(...imageBlocks);
+        }
+
+        // 添加评论 blocks
+        if (data.commentList && data.commentList.length > 0) {
+          const commentBlocks = convertCommentListToBlocks(data.commentList);
+          children.push(...commentBlocks);
+        }
 
         if (existing) {
           await api.updatePage(existing.id, props);
-          // 更新页面内容（评论列表）
-          if (children && children.length > 0) {
+          // 更新页面内容（图片 + 评论列表）
+          if (children.length > 0) {
             try {
               await replacePageContent(api, existing.id, children);
-              console.log('[Notion] 笔记评论列表已更新');
+              console.log('[Notion] 笔记图片和评论列表已更新');
             } catch (e) {
-              console.warn('[Notion] 更新评论列表失败:', e);
+              console.warn('[Notion] 更新页面内容失败:', e);
             }
           }
           return { ok: true, action: 'update', pageId: existing.id };
         } else {
-          const result = await api.createPage(props, children);
+          const result = await api.createPage(props, children.length > 0 ? children : null);
           return { ok: true, action: 'create', pageId: result?.id };
         }
       } catch (e) {

@@ -2,6 +2,7 @@
 export interface XiaohongshuNote {
   url?: string
   noteId?: string
+  searchKeyword?: string  // 搜索关键词（搜索结果采集时）
   title?: string
   content?: string
   publishTime?: number
@@ -17,8 +18,8 @@ export interface XiaohongshuNote {
   authorFansCount?: number
   authorLikes?: number
   authorFollowing?: number
-  coverUrl?: string
-  imageUrls?: string
+  coverUrl?: string | null  // 封面图（默认取图片第一张）
+  imageUrls?: string | null
   videoUrl?: string
   mediaType?: 'image' | 'video'
   tags?: string[]
@@ -99,7 +100,7 @@ export interface WechatArticle {
   source?: 'dom' | 'api'
   crawledAt?: string
   // 表格列中的复选框状态
-  fetchData?: boolean     // 是否采集数据
+  fetchData?: boolean           // 是否采集数据（阅读/点赞等）
 }
 
 // 公众号历史文章列表项（来自 post_history API）
@@ -110,14 +111,14 @@ export interface WechatHistoryItem {
   cover_url?: string
   digest?: string
   position?: number
-  fetchData?: boolean     // 是否采集数据
+  fetchData?: boolean     // 是否采集数据（阅读/点赞等）
   collected?: boolean     // 是否已收录（从 Notion 检测）
 }
 
 // 采集数据类型
 export enum CollectionType {
   XHSNoteDetail = 'xhs-note-detail',  // 小红书笔记详情页
-  XHSFeed = 'xhs-feed',               // 小红书发现页/批量笔记
+  XHSFeed = 'xhs-feed',               // 小红书搜索结果（沿用 feed 类型标识）
   XHSAccount = 'xhs-account',         // 小红书账号
   WechatArticle = 'wechat-article'  // 公众号文章（内容/数据完整性取决于采集方式）
 }
