@@ -1,6 +1,48 @@
 import type { WechatArticle, WechatHistoryItem } from '@/types'
 import { CollectionType } from '@/types'
-import { fetchPostHistory, fetchArticleHtml, parseDajialaError } from '@/utils/dajialaApi'
+import {
+  fetchPostHistory,
+  fetchArticleHtml,
+  fetchArticleData,
+  fetchArticleDetail,
+  fetchPrincipalInfo,
+  parseDajialaError
+} from '@/utils/dajialaApi'
+import TurndownService from 'turndown'
+
+type HistoryEnrichStage = 'content' | 'data' | 'principal'
+
+type EnrichHistoryOptions = {
+  fetchPrincipalInfo?: boolean
+  onProgress?: (msg: string) => void
+  onItemError?: (payload: { url: string; stage: HistoryEnrichStage; message: string }) => void
+}
+
+const turndownService = new TurndownService({
+  headingStyle: 'atx',
+  codeBlockStyle: 'fenced',
+  emDelimiter: '*',
+  bulletListMarker: '-',
+  strongDelimiter: '**',
+  linkStyle: 'inlined',
+  linkReferenceStyle: 'full'
+})
+
+turndownService.addRule('preserveLineBreaks', {
+  filter: ['br'],
+  replacement: () => '\n'
+})
+
+turndownService.addRule('images', {
+  filter: 'img',
+  replacement: (content, node: any) => {
+    const alt = node.alt || ''
+    const src = node.src || ''
+    return src ? `![${alt}](${src})` : ''
+  }
+})
+
+turndownService.remove(['script', 'style', 'svg', 'iframe'])
 
 /**
  * 公众号历史文章爬虫
@@ -115,6 +157,128 @@ export class WechatAccountHistoryCrawler {
 
     showTip('历史文章采集完成')
     return results
+  }
+
+  async enrichArticles(
+    articles: WechatArticle[],
+    opts?: EnrichHistoryOptions
+  ): Promise<WechatArticle[]> {
+    if (!articles.length) return articles
+
+    const reportItemError = (url: string, stage: HistoryEnrichStage, message: string) => {
+      opts?.onItemError?.({ url, stage, message })
+    }
+
+    for (let i = 0; i < articles.length; i++) {
+      const a = articles[i]
+      const url = a?.url?.trim()
+      if (!url) continue
+
+      opts?.onProgress?.(`正在获取 ${i + 1}/${articles.length} 篇的正文...`)
+      try {
+        const res = await fetchArticleDetail(url)
+        if (res.code !== 0) {
+          throw new Error(res.error || parseDajialaError(res))
+        }
+
+        const d = res as any
+        if (d.content) {
+          a.contentHtml = d.content
+          try {
+            let html = d.content.trim()
+            const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i)
+            if (bodyMatch) html = bodyMatch[1]
+
+            html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            html = html.replace(/\s*style="[^"]*"/gi, '')
+            html = html.replace(/\s*class="[^"]*"/gi, '')
+
+            a.contentMarkdown = turndownService.turndown(html)
+          } catch {
+            a.contentMarkdown = d.content
+          }
+        }
+
+        if (!a.title && d.title) a.title = d.title
+        if (!a.coverUrl && d.cover_url) a.coverUrl = d.cover_url
+        if (!a.publishTimeStr && d.post_time_str) a.publishTimeStr = d.post_time_str
+      } catch (e: any) {
+        const message = e?.message || String(e)
+        console.warn('[CJDB] 获取文章正文失败:', url, e)
+        reportItemError(url, 'content', message)
+      }
+    }
+
+    for (let i = 0; i < articles.length; i++) {
+      const a = articles[i]
+      const url = a?.url?.trim()
+      if (!url || !a.fetchData) continue
+
+      opts?.onProgress?.(`正在获取 ${i + 1}/${articles.length} 篇的阅读数据...`)
+      try {
+        const res = await fetchArticleData(url)
+        if (res.code !== 0) {
+          throw new Error(res.error || parseDajialaError(res))
+        }
+
+        if (res.data) {
+          const d = res.data
+          if (d.read != null) a.read = d.read
+          if (d.zan != null) a.zan = d.zan
+          if (d.looking != null) a.looking = d.looking
+          if (d.share_num != null) a.shareNum = d.share_num
+          if (d.collect_num != null) a.collectNum = d.collect_num
+          if (d.comment_count != null) a.commentCount = d.comment_count
+          if (!a.publishTimeStr) a.publishTimeStr = d.publish_time_str || d.publishTimeStr
+          if (!a.coverUrl) a.coverUrl = d.cover_url || d.coverUrl
+          if (!a.title && d.title) a.title = d.title
+        }
+      } catch (e: any) {
+        const message = e?.message || String(e)
+        console.warn('[CJDB] 获取文章数据失败:', url, e)
+        reportItemError(url, 'data', message)
+      }
+    }
+
+    if (opts?.fetchPrincipalInfo) {
+      const firstArticle = articles.find((a) => a?.url)
+      if (firstArticle?.url) {
+        opts.onProgress?.('正在获取公众号主体信息...')
+        try {
+          const res = await fetchPrincipalInfo(firstArticle.url)
+          if (res.code !== 0) {
+            throw new Error(res.error || parseDajialaError(res))
+          }
+          if (res.data) {
+            const d = res.data
+            const principalInfo: any = {}
+            if (d.company_name) principalInfo.companyName = d.company_name
+            const region = [d.last_login_province, d.last_login_country].filter(Boolean).join(' ') || d.province || d.registered_country
+            if (region) principalInfo.region = region
+            if (d.name || d.owner_name) principalInfo.name = d.name ?? d.owner_name
+            if (d.nick_name || d.nickName) principalInfo.nickname = d.nick_name ?? d.nickName
+            if (d.verify_date) principalInfo.verifyDate = d.verify_date
+            if (d.gh_id) principalInfo.ghId = d.gh_id
+            if (d.verify_customer_type || d.customer_type) principalInfo.verifyType = d.verify_customer_type ?? d.customer_type
+            if (Object.keys(principalInfo).length > 0) {
+              articles.forEach((a) => {
+                a.principalInfo = principalInfo
+              })
+            }
+          }
+        } catch (e: any) {
+          const message = e?.message || String(e)
+          console.warn('[CJDB] 获取公众号主体信息失败:', firstArticle.url, e)
+          articles.forEach((a) => {
+            const url = a?.url?.trim()
+            if (url) reportItemError(url, 'principal', message)
+          })
+        }
+      }
+    }
+
+    return articles
   }
 
   marker(): void {

@@ -215,12 +215,20 @@
                 v-for="(item, i) in historyItems"
                 :key="item.url"
                 class="history-row"
-                :class="{ checked: historySelected.has(item.url), disabled: item.collected }"
+                :class="{ checked: historySelected.has(item.url), disabled: item.collected, failed: hasHistoryItemError(item) }"
                 @click="!item.collected && toggleHistoryItem(item)">
                 <td>
                   <span class="history-checkbox">{{ historySelected.has(item.url) ? '✓' : '○' }}</span>
                 </td>
-                <td class="history-title">{{ item.title || '无标题' }}</td>
+                <td class="history-title">
+                  <el-tooltip
+                    v-if="hasHistoryItemError(item)"
+                    :content="getHistoryItemErrorText(item)"
+                    placement="top">
+                    <span class="history-title-text failed">{{ item.title || '无标题' }}</span>
+                  </el-tooltip>
+                  <span v-else class="history-title-text">{{ item.title || '无标题' }}</span>
+                </td>
                 <td class="history-date">{{ item.post_time_str || '' }}</td>
                 <td style="text-align: center;">
                   <el-checkbox v-model="item.collected" disabled />
@@ -269,32 +277,45 @@
       </template>
     </el-dialog>
 
-    <!-- 数据预览弹窗 -->
-    <el-dialog
+    <XhsFeedPreviewDialog
+      v-if="previewFeedData"
       v-model="showPreview"
-      title="采集数据预览"
-      width="520px"
-      :close-on-click-modal="false"
-      @close="handlePreviewClose">
-      <div class="preview-content">
-        <pre class="preview-json">{{ previewDataFormatted }}</pre>
-      </div>
-      <!-- 公众号额外数据：可选勾选，勾选后需配置 API Key 并拉取 -->
-      <div v-if="previewCollectionType === CollectionType.WechatArticle" class="extra-data-section">
-        <el-checkbox v-model="extraDataChecked">
-          同时采集阅读量、点赞、分享等数据
-        </el-checkbox>
-        <el-checkbox v-model="extraPrincipalInfoChecked">
-          同时采集公众号主体信息（公司名称、地区、认证等）
-        </el-checkbox>
-      </div>
-      <template #footer>
-        <el-button @click="showPreview = false">取消</el-button>
-        <el-button type="primary" :loading="collecting" @click="confirmAndSave">
-          确认采集
-        </el-button>
-      </template>
-    </el-dialog>
+      :data="previewFeedData"
+      :loading="collecting"
+      @confirm="confirmAndSave"
+      @close="handlePreviewClose" />
+
+    <XhsNotePreviewDialog
+      v-if="previewNoteData"
+      v-model="showPreview"
+      :data="previewNoteData"
+      :loading="collecting"
+      @confirm="confirmAndSave"
+      @close="handlePreviewClose" />
+
+    <XhsAccountPreviewDialog
+      v-if="previewAccountData"
+      v-model="showPreview"
+      :data="previewAccountData"
+      :loading="collecting"
+      @confirm="confirmAndSave"
+      @close="handlePreviewClose" />
+
+    <WechatArticlePreviewDialog
+      v-if="previewWechatData"
+      v-model="showPreview"
+      :data="previewWechatData"
+      :loading="collecting"
+      @confirm="confirmAndSave"
+      @close="handlePreviewClose" />
+
+    <FeishuDocPreviewDialog
+      v-if="previewFeishuDocData"
+      v-model="showPreview"
+      :data="previewFeishuDocData"
+      :loading="collecting"
+      @confirm="confirmAndSave"
+      @close="handlePreviewClose" />
   </div>
 </template>
 
@@ -304,9 +325,16 @@ import { Setting, EditPen, Delete, MoreFilled, ArrowDown } from '@element-plus/i
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeCrawlData } from '@/stores/Store'
 import { storeConfig, STORE_SCHEMA } from '@/config/StoreConfig'
-import { getDajialaApiKey, setDajialaApiKey, augmentWechatArticlesWithApiData, augmentWechatArticlesWithPrincipalInfo, augmentWechatArticlesWithContent, fetchPrincipalInfo } from '@/utils/dajialaApi'
+import { getDajialaApiKey, setDajialaApiKey, augmentWechatArticlesWithApiData, augmentWechatArticlesWithPrincipalInfo, fetchPrincipalInfo } from '@/utils/dajialaApi'
+import { _fetch } from '@/utils/_fetch'
+import { parseNotionDatabaseId } from '@/utils/notion'
 import { CollectionType, StoreType } from '@/types'
-import type { Store, XiaohongshuNote, XiaohongshuAccount, WechatArticle, WechatHistoryItem } from '@/types'
+import type { Store, XiaohongshuNote, XiaohongshuAccount, WechatArticle, WechatHistoryItem, FeishuDoc } from '@/types'
+import XhsFeedPreviewDialog from '@/components/previews/XhsFeedPreviewDialog.vue'
+import XhsNotePreviewDialog from '@/components/previews/XhsNotePreviewDialog.vue'
+import XhsAccountPreviewDialog from '@/components/previews/XhsAccountPreviewDialog.vue'
+import WechatArticlePreviewDialog from '@/components/previews/WechatArticlePreviewDialog.vue'
+import FeishuDocPreviewDialog from '@/components/previews/FeishuDocPreviewDialog.vue'
 
 // 接收 crawlers 数组（同页可多 Crawler，如公众号 文章|历史）
 const props = defineProps<{
@@ -332,14 +360,16 @@ const showRemarkDialog = ref(false)
 const remarkInputValue = ref('')
 let remarkResolve: ((value: string) => void) | null = null
 const showPreview = ref(false)
-type PreviewData = XiaohongshuNote | XiaohongshuAccount | WechatArticle | XiaohongshuNote[] | WechatArticle[] | null
+type PreviewData = XiaohongshuNote | XiaohongshuAccount | WechatArticle | FeishuDoc | XiaohongshuNote[] | WechatArticle[] | null
 const previewData = ref<PreviewData>(null)
 const previewCollectionType = ref<CollectionType | ''>('')
-// 公众号：是否同时采集阅读量等额外数据
-const extraDataChecked = ref(false)
-// 公众号：是否同时采集公众号主体信息（公司名称、地区、认证等）
-const extraPrincipalInfoChecked = ref(false)
 const configForm = ref<{ type: StoreType; [k: string]: unknown }>({ type: StoreType.Notion })
+
+type PreviewConfirmOptions = {
+  downloadImages?: boolean
+  extraData?: boolean
+  extraPrincipalInfo?: boolean
+}
 
 // 当前选中的 crawler（多 Crawler 时取第一个，如公众号 内容/数据 合并为单一入口）
 const selectedCrawlerIdx = ref(0)
@@ -360,121 +390,34 @@ const collectingPhaseText = computed(() =>
   isSaving.value ? '保存中...' : '采集中...'
 )
 
-// 按数据类型格式化预览
-function getXHSAccountPreview(data: XiaohongshuAccount): string {
-  const lines = [
-    `昵称: ${data.nickname || '-'}`,
-    `账号ID: ${data.userId || '-'}`,
-    `归属地: ${data.location || '-'}`,
-    `粉丝数: ${data.fansCount ?? '-'}`,
-    `关注数: ${data.followingCount ?? '-'}`,
-    `获赞数: ${data.likedCount ?? '-'}`,
-    `笔记数: ${data.notesCount ?? '-'}`,
-    `主页URL: ${data.url || '-'}`,
-    `简介: ${(data.description || '-').slice(0, 200)}${(data.description?.length || 0) > 200 ? '...' : ''}`,
-    `笔记列表: ${data.noteListText || '-'}`
-  ]
-  return lines.join('\n')
-}
+const previewFeedData = computed<XiaohongshuNote[] | null>(() => {
+  if (previewCollectionType.value !== CollectionType.XHSFeed) return null
+  if (!Array.isArray(previewData.value)) return null
+  return previewData.value as XiaohongshuNote[]
+})
 
-function getXHSFeedPreview(data: XiaohongshuNote[]): string {
-  const total = data.length
-  const keyword = data.find((item) => item.searchKeyword)?.searchKeyword || '-'
-  const lines = [`关键词: ${keyword}`, `共 ${total} 条结果`, '---']
-  data.slice(0, 20).forEach((item, i) => {
-    lines.push(`${i + 1}. ${(item.title || '未知').slice(0, 40)} | ❤️${item.likes ?? 0} | 👤${item.authorNickname || '-'}`)
-  })
-  if (total > 20) lines.push(`... 其余 ${total - 20} 条`)
-  return lines.join('\n')
-}
+const previewNoteData = computed<XiaohongshuNote | null>(() => {
+  if (previewCollectionType.value !== CollectionType.XHSNoteDetail) return null
+  if (!previewData.value || Array.isArray(previewData.value)) return null
+  return previewData.value as XiaohongshuNote
+})
 
-function getWeChatArticlePreview(data: WechatArticle): string {
-  const lines = [
-    `标题: ${(data.title || '-').slice(0, 80)}`,
-    `URL: ${data.url || '-'}`,
-    `公众号: ${data.principalInfo?.nickname || '-'}`,
-    `发布时间: ${data.publishTimeStr || '-'}`,
-    `IP归属地: ${data.ipLocation || '-'}`,
-    `阅读: ${data.read ?? '-'} | 拇指赞: ${data.zan ?? '-'} | 爱心赞: ${data.looking ?? '-'}`,
-    `转发: ${data.shareNum ?? '-'} | 收藏: ${data.collectNum ?? '-'} | 评论: ${data.commentCount ?? '-'}`,
-    `正文: ${(data.contentMarkdown || data.content || '-').slice(0, 300)}${((data.contentMarkdown || data.content)?.length || 0) > 300 ? '...' : ''}`
-  ]
-  return lines.join('\n')
-}
+const previewAccountData = computed<XiaohongshuAccount | null>(() => {
+  if (previewCollectionType.value !== CollectionType.XHSAccount) return null
+  if (!previewData.value || Array.isArray(previewData.value)) return null
+  return previewData.value as XiaohongshuAccount
+})
 
-function getWeChatArticleListPreview(data: WechatArticle[]): string {
-  const total = data.length
-  const mpNickname = data[0]?.principalInfo?.nickname || ''
-  const lines = [
-    `共 ${total} 篇文章${mpNickname ? ` | 公众号: ${mpNickname}` : ''}`,
-    '---'
-  ]
-  data.slice(0, 20).forEach((item, i) => {
-    lines.push(`${i + 1}. ${(item.title || '未知').slice(0, 50)} | 👁${item.read ?? 0} 💙${item.zan ?? 0} ❤️${item.looking ?? 0}`)
-  })
-  if (total > 20) lines.push(`... 其余 ${total - 20} 篇`)
-  return lines.join('\n')
-}
+const previewWechatData = computed<WechatArticle | WechatArticle[] | null>(() => {
+  if (previewCollectionType.value !== CollectionType.WechatArticle) return null
+  if (!previewData.value) return null
+  return previewData.value as WechatArticle | WechatArticle[]
+})
 
-function getXHSNoteDetailPreview(data: XiaohongshuNote): string {
-  const lines = [
-    `标题: ${(data.title || '-').slice(0, 80)}`,
-    `URL: ${data.url || '-'}`,
-    `封面: ${data.coverUrl || '-'}`,
-    `作者: ${data.authorNickname || '-'} | 粉丝: ${data.authorFansCount ?? '-'} | 获赞: ${data.authorLikes ?? '-'}`,
-    `发布时间: ${data.publishTimeStr || '-'} | 地点: ${data.location || '-'}`,
-    `点赞: ${data.likes ?? '-'} | 收藏: ${data.favorites ?? '-'} | 评论: ${data.comments ?? '-'}`,
-    `正文: ${(data.content || '-').slice(0, 300)}${(data.content?.length || 0) > 300 ? '...' : ''}`
-  ]
-  const commentCount = data.commentList?.length ?? 0
-  if (commentCount > 0) {
-    lines.push(`---\n评论 ${commentCount} 条`)
-    data.commentList!.slice(0, 10).forEach((c, i) => {
-      const text = (c.comment || '').slice(0, 60)
-      lines.push(`  ${i + 1}. ${text}${(c.comment?.length || 0) > 60 ? '...' : ''}`)
-    })
-    if (commentCount > 10) lines.push(`  ... 其余 ${commentCount - 10} 条`)
-  }
-  return lines.join('\n')
-}
-
-function getPreview(collectionType: CollectionType | '', data: PreviewData): string {
-  if (!data) return ''
-
-  if (collectionType === CollectionType.XHSAccount) {
-    return getXHSAccountPreview(data as XiaohongshuAccount)
-  }
-
-  if (collectionType === CollectionType.XHSFeed) {
-    if (Array.isArray(data)) return getXHSFeedPreview(data as XiaohongshuNote[])
-    return getXHSNoteDetailPreview(data as XiaohongshuNote)
-  }
-
-  if (collectionType === CollectionType.XHSNoteDetail) {
-    if (Array.isArray(data)) return getXHSFeedPreview(data as XiaohongshuNote[])
-    return getXHSNoteDetailPreview(data as XiaohongshuNote)
-  }
-
-  if (collectionType === CollectionType.WechatArticle) {
-    if (Array.isArray(data)) return getWeChatArticleListPreview(data as WechatArticle[])
-    return getWeChatArticlePreview(data as WechatArticle)
-  }
-
-  // 未知类型时的兜底策略
-  if (Array.isArray(data)) return getXHSFeedPreview(data as XiaohongshuNote[])
-  if (data && typeof data === 'object' && 'userId' in data) return getXHSAccountPreview(data as XiaohongshuAccount)
-  return getXHSNoteDetailPreview(data as XiaohongshuNote)
-}
-
-const previewDataFormatted = computed(() => {
-  const data = previewData.value
-  const type = previewCollectionType.value
-  if (!data) return ''
-  try {
-    return getPreview(type, data)
-  } catch {
-    return String(data)
-  }
+const previewFeishuDocData = computed<FeishuDoc | null>(() => {
+  if (previewCollectionType.value !== CollectionType.FeishuDoc) return null
+  if (!previewData.value || Array.isArray(previewData.value)) return null
+  return previewData.value as FeishuDoc
 })
 
 // 采集类型文案（emoji + 文字）
@@ -484,6 +427,7 @@ const collectTypeText = computed(() => {
   if (type === CollectionType.XHSNoteDetail) return '📕笔记详情'
   if (type === CollectionType.XHSFeed) return '🔍搜索结果'
   if (type === CollectionType.WechatArticle) return '📰公众号'
+  if (type === CollectionType.FeishuDoc) return '📄飞书文档'
   return ''
 })
 
@@ -561,6 +505,7 @@ const historyLoadingMore = ref(false)
 const historyLoadedByUrl = ref(false)
 const historySourceUrl = ref('')
 const historyFetchPrincipalInfo = ref(false) // 全局选项：是否采集公众号主体信息
+const historyItemErrors = ref<Record<string, string[]>>({})
 
 const historySelectedCount = computed(() => historySelected.value.size)
 const allSelected = computed(() => {
@@ -568,11 +513,37 @@ const allSelected = computed(() => {
   return uncollectedItems.length > 0 && uncollectedItems.every(i => historySelected.value.has(i.url))
 })
 
+function hasHistoryItemError(item: WechatHistoryItem): boolean {
+  return !!(item?.url && historyItemErrors.value[item.url]?.length)
+}
+
+function getHistoryItemErrorText(item: WechatHistoryItem): string {
+  if (!item?.url) return ''
+  return (historyItemErrors.value[item.url] || []).join('；')
+}
+
+function clearHistoryErrors() {
+  historyItemErrors.value = {}
+}
+
+function addHistoryItemError(url: string, message: string) {
+  if (!url || !message) return
+  const key = url.trim()
+  if (!key) return
+  const current = historyItemErrors.value[key] || []
+  if (current.includes(message)) return
+  historyItemErrors.value = {
+    ...historyItemErrors.value,
+    [key]: [...current, message]
+  }
+}
+
 function closeHistoryDialog() {
   showHistoryDialog.value = false
   historyStep.value = 'input'
   historyAccountName.value = ''
   historyItems.value = []
+  clearHistoryErrors()
   historySelected.value = new Set()
   historyPage.value = 1
   historyTotalPage.value = 1
@@ -584,6 +555,7 @@ function closeHistoryDialog() {
 function backToInput() {
   historyStep.value = 'input'
   historyItems.value = []
+  clearHistoryErrors()
   historySelected.value = new Set()
   historyPage.value = 1
   historyTotalPage.value = 1
@@ -611,6 +583,7 @@ async function loadHistoryByUrl() {
     }
     const items = res.items || []
     historyItems.value = items
+    clearHistoryErrors()
     historySelected.value = new Set()
     historyPage.value = 1
     historyTotalPage.value = res.totalPage ?? 1
@@ -666,6 +639,7 @@ async function loadHistoryList(page = 1) {
     const items = res.items || []
     if (page === 1) {
       historyItems.value = items
+      clearHistoryErrors()
       historySelected.value = new Set()
       historyStep.value = 'select'
 
@@ -718,9 +692,7 @@ async function checkCollectedStatus(items: WechatHistoryItem[]) {
 
     // 批量查询 Notion 数据库
     const token = currentStore.token?.trim()
-    let databaseId = (currentStore.databaseId || '').replace(/\s/g, '')
-    const urlMatch = databaseId.match(/notion\.(?:so|com)\/[^/]+\/([a-f0-9]{32})/)
-    if (urlMatch) databaseId = urlMatch[1]
+    const databaseId = parseNotionDatabaseId(currentStore.databaseId)
 
     if (!token || !databaseId) return
 
@@ -728,7 +700,7 @@ async function checkCollectedStatus(items: WechatHistoryItem[]) {
       const batch = urls.slice(i, i + 10)
       const orFilters = batch.map(url => ({ property: 'URL', url: { equals: url } }))
 
-      const res = await fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
+      const res = await _fetch(`https://api.notion.com/v1/databases/${databaseId}/query`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -837,7 +809,7 @@ function handleSelectCommand(command: string) {
 
 async function confirmHistoryCollect() {
   const crawler = effectiveHistoryCrawler.value
-  if (!crawler?.crawl || historySelectedCount.value === 0) return
+  if (!crawler?.crawl || !crawler?.enrichArticles || historySelectedCount.value === 0) return
   if (!(await ensureDajialaApiKey())) return
 
   const selectedItems = historyItems.value.filter((i) => historySelected.value.has(i.url) && !i.collected)
@@ -848,6 +820,7 @@ async function confirmHistoryCollect() {
 
   collecting.value = true
   clearTipMessage('')
+  clearHistoryErrors()
 
   try {
     // 1. 采集基础数据
@@ -877,21 +850,33 @@ async function confirmHistoryCollect() {
       })
     }
 
-    // 4. 必须采集正文
-    articles = await augmentWechatArticlesWithContent(articles, (msg) => tipsDisplay(msg))
+    // 4. 在 Crawler 中补齐正文/数据/主体信息，单条失败继续
+    articles = await crawler.enrichArticles(articles, {
+      fetchPrincipalInfo: historyFetchPrincipalInfo.value,
+      onProgress: (msg: string) => tipsDisplay(msg),
+      onItemError: (payload: { url: string; stage: 'content' | 'data' | 'principal'; message: string }) => {
+        const stageText =
+          payload.stage === 'content'
+            ? '正文采集失败'
+            : payload.stage === 'data'
+              ? '阅读数据采集失败'
+              : '主体信息采集失败'
+        addHistoryItemError(payload.url, `${stageText}: ${payload.message}`)
+      }
+    })
 
-    // 5. 根据 fetchData 复选框状态采集数据
-    const needData = articles.some(a => a.fetchData)
-    if (needData) {
-      articles = await augmentWechatArticlesWithApiData(articles, (msg) => tipsDisplay(msg))
+    const failedUrlSet = new Set(Object.keys(historyItemErrors.value))
+    const articlesToSave = articles.filter((a) => {
+      const url = a?.url?.trim()
+      return !!url && !failedUrlSet.has(url)
+    })
+
+    if (articlesToSave.length === 0) {
+      ElMessage.error('采集完成，但全部失败。已标红，可悬浮查看错误原因')
+      return
     }
 
-    // 6. 根据全局复选框状态采集公众号主体信息
-    if (historyFetchPrincipalInfo.value) {
-      articles = await augmentWechatArticlesWithPrincipalInfo(articles, (msg) => tipsDisplay(msg))
-    }
-
-    // 7. 直接保存，不预览
+    // 5. 直接保存，不预览
     const storeCfg = storeConfig.getCurrentStore(CollectionType.WechatArticle)
     if (!storeCfg || !isStoreConfigured(storeCfg)) {
       ElMessage.warning('请先配置存储源')
@@ -899,25 +884,38 @@ async function confirmHistoryCollect() {
     }
 
     tipsDisplay('正在保存到 Notion...')
-    const result = await storeCrawlData(CollectionType.WechatArticle, articles, storeCfg)
+    const result = await storeCrawlData(CollectionType.WechatArticle, articlesToSave, storeCfg)
     console.log('[CJDB] confirmHistoryCollect Result:', result)
 
-    // 8. 检查结果
+    // 6. 检查保存结果，按 URL 记录失败
     const results = Array.isArray(result) ? result : [result]
-    const hasError = results.some((r) => !r.ok)
-    if (hasError) {
-      const err = results.find((r) => !r.ok)
-      throw new Error(err?.error || '保存失败')
+    const savedUrlSet = new Set<string>()
+    results.forEach((r, idx) => {
+      const a = articlesToSave[idx]
+      const url = a?.url?.trim()
+      if (!url) return
+      if (r?.ok) {
+        savedUrlSet.add(url)
+      } else {
+        addHistoryItemError(url, `保存失败: ${r?.error || '未知错误'}`)
+      }
+    })
+
+    // 如果返回结构不是逐条结果，兜底处理第一条
+    if (!Array.isArray(result) && articlesToSave.length === 1 && result?.ok) {
+      const url = articlesToSave[0]?.url?.trim()
+      if (url) savedUrlSet.add(url)
     }
 
     clearTipMessage()
 
-    // 9. 标记已收录，不关闭弹窗
-    selectedItems.forEach(item => {
-      item.collected = true
+    // 7. 仅标记保存成功的数据为已收录
+    selectedItems.forEach((item) => {
+      const url = item.url?.trim()
+      if (url && savedUrlSet.has(url)) item.collected = true
     })
 
-    // 10. 取消选中已收录的文章
+    // 8. 取消选中已收录的文章
     const newSelected = new Set<string>()
     historySelected.value.forEach(url => {
       const item = historyItems.value.find(i => i.url === url)
@@ -927,7 +925,14 @@ async function confirmHistoryCollect() {
     })
     historySelected.value = newSelected
 
-    ElMessage.success(`已成功采集 ${selectedItems.length} 篇文章`)
+    const total = selectedItems.length
+    const successCount = savedUrlSet.size
+    const failedCount = Math.max(total - successCount, 0)
+    if (failedCount > 0) {
+      ElMessage.warning(`采集完成：成功 ${successCount} 篇，失败 ${failedCount} 篇（已标红）`)
+    } else {
+      ElMessage.success(`已成功采集 ${successCount} 篇文章`)
+    }
   } catch (e: any) {
     ElMessage.error('采集失败: ' + (e?.message || String(e)))
   } finally {
@@ -1014,6 +1019,14 @@ async function saveConfig() {
     ElMessage.warning('本地存储暂未实现')
     return
   }
+  if (type === StoreType.Notion) {
+    const notionDbId = parseNotionDatabaseId(String((config as Record<string, unknown>).databaseId ?? ''))
+    if (!notionDbId) {
+      ElMessage.warning('请填写正确的 Notion Database ID 或数据库 URL')
+      return
+    }
+    ;(config as Record<string, unknown>).databaseId = notionDbId
+  }
   if (!isStoreConfigured({ type: type as string, ...config } as any)) {
     ElMessage.warning('请先填写完整配置信息')
     return
@@ -1058,7 +1071,7 @@ async function removeStoreAt(index: number) {
 // 校验当前存储源是否已配置
 function isStoreConfigured(store: { type: string; token?: string; databaseId?: string; appId?: string; appSecret?: string; appToken?: string; tableId?: string }): boolean {
   if (store.type === 'local') return false // 本地存储未实现
-  if (store.type === 'notion') return !!(store.token?.trim() && store.databaseId?.trim())
+  if (store.type === 'notion') return !!(store.token?.trim() && parseNotionDatabaseId(store.databaseId))
   if (store.type === 'feishu') return !!(store.appId?.trim() && store.appSecret?.trim() && store.appToken?.trim() && store.tableId?.trim())
   return false
 }
@@ -1096,10 +1109,8 @@ async function handleCollect() {
     const collectionType = state.collectionType
 
     clearTipMessage('')
-    previewData.value = data as XiaohongshuNote | XiaohongshuAccount | XiaohongshuNote[] | WechatArticle | WechatArticle[]
+    previewData.value = data as XiaohongshuNote | XiaohongshuAccount | XiaohongshuNote[] | WechatArticle | WechatArticle[] | FeishuDoc
     previewCollectionType.value = collectionType
-    extraDataChecked.value = false
-    extraPrincipalInfoChecked.value = false
     showPreview.value = true
   } catch (e: any) {
     console.error('[CJDB] 采集失败', e)
@@ -1112,7 +1123,7 @@ async function handleCollect() {
 }
 
 // 预览弹窗确认后保存（统一通过 storeCrawlData）
-async function confirmAndSave() {
+async function confirmAndSave(options: PreviewConfirmOptions = {}) {
   const data = previewData.value
   const collectionType = previewCollectionType.value
   if (!data) return
@@ -1131,20 +1142,31 @@ async function confirmAndSave() {
   let dataToSave: any = data
   if (collectionType === CollectionType.WechatArticle) {
     dataToSave = Array.isArray(data) ? [...(data as WechatArticle[])] : [data as WechatArticle]
-    const needApiKey = extraDataChecked.value || extraPrincipalInfoChecked.value
+    const needApiKey = !!options.extraData || !!options.extraPrincipalInfo
     if (needApiKey && !(await ensureDajialaApiKey())) {
       collecting.value = false
       isSaving.value = false
       return
     }
-    if (extraPrincipalInfoChecked.value) {
+    if (options.extraPrincipalInfo) {
       dataToSave = await augmentWechatArticlesWithPrincipalInfo(dataToSave, (msg) => tipsDisplay(msg))
     }
-    if (extraDataChecked.value) {
+    if (options.extraData) {
       dataToSave = await augmentWechatArticlesWithApiData(dataToSave, (msg) => tipsDisplay(msg))
     }
   } else {
     dataToSave = data
+  }
+
+  const shouldDownloadImages = options.downloadImages !== false
+  const appendImageOption = (item: any) => ({
+    ...(item || {}),
+    downloadImages: shouldDownloadImages
+  })
+  if (Array.isArray(dataToSave)) {
+    dataToSave = dataToSave.map(appendImageOption)
+  } else if (dataToSave && typeof dataToSave === 'object') {
+    dataToSave = appendImageOption(dataToSave)
   }
 
   try {
@@ -1174,6 +1196,8 @@ async function confirmAndSave() {
       ElMessage.success(`已保存 ${data.length} 篇公众号文章${pageIdSuffix}`)
     } else if (collectionType === CollectionType.WechatArticle) {
       ElMessage.success(`已保存公众号文章${pageIdSuffix}`)
+    } else if (collectionType === CollectionType.FeishuDoc) {
+      ElMessage.success(`已保存飞书文档${pageIdSuffix}`)
     } else if (Array.isArray(data)) {
       ElMessage.success(`已保存 ${data.length} 条笔记${pageIdSuffix}`)
     } else {
@@ -1194,7 +1218,6 @@ async function confirmAndSave() {
 function handlePreviewClose() {
   previewData.value = null
   previewCollectionType.value = ''
-  extraDataChecked.value = false
 }
 
 // 监听状态变化（勾选变化时刷新 UI）
@@ -1366,6 +1389,11 @@ onMounted(async () => {
           background: transparent;
         }
       }
+      &.failed {
+        td {
+          background: #fef0f0;
+        }
+      }
       td {
         padding: 10px 12px;
         border-bottom: 1px solid #ebeef5;
@@ -1387,6 +1415,20 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.history-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  max-width: 100%;
+
+  &.failed {
+    color: #f56c6c;
+    font-weight: 500;
+    cursor: help;
+  }
 }
 
 .history-date {
@@ -1615,34 +1657,6 @@ onMounted(async () => {
   transform: translateY(-30px) scale(0.8);
 }
 
-.extra-data-section {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #ebeef5;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.extra-data-section .el-checkbox {
-  font-size: 13px;
-}
-
-.preview-content {
-  max-height: 360px;
-  overflow: auto;
-  background: #f8f9fa;
-  border-radius: 8px;
-  padding: 12px;
-}
-
-.preview-json {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #333;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
 </style>
 
 <!-- 非 scoped：el-select / el-dropdown / el-dialog 需全局样式确保层级正确 -->

@@ -2,6 +2,8 @@
 export interface XiaohongshuNote {
   url?: string
   noteId?: string
+  rank?: number
+  downloadImages?: boolean
   searchKeyword?: string  // 搜索关键词（搜索结果采集时）
   title?: string
   content?: string
@@ -56,6 +58,7 @@ export interface CommentExport {
 export interface XiaohongshuAccount {
   userId: string
   nickname: string
+  downloadImages?: boolean
   avatarUrl?: string
   description?: string
   location?: string  // 归属地
@@ -84,6 +87,7 @@ export interface WechatPrincipalInfo {
 export interface WechatArticle {
   url?: string
   title?: string
+  downloadImages?: boolean
   content?: string        // 纯文本内容
   contentHtml?: string    // HTML 内容（从文章详情 API 获取）
   contentMarkdown?: string // Markdown 内容（从 contentHtml 转换）
@@ -115,12 +119,27 @@ export interface WechatHistoryItem {
   collected?: boolean     // 是否已收录（从 Notion 检测）
 }
 
+// 飞书文档数据结构
+export interface FeishuDoc {
+  url?: string
+  title?: string
+  docType?: string
+  workspace?: string
+  excerpt?: string
+  content?: string
+  contentHtml?: string
+  contentMarkdown?: string
+  source?: 'dom' | 'runtime'
+  crawledAt?: string
+}
+
 // 采集数据类型
 export enum CollectionType {
   XHSNoteDetail = 'xhs-note-detail',  // 小红书笔记详情页
   XHSFeed = 'xhs-feed',               // 小红书搜索结果（沿用 feed 类型标识）
   XHSAccount = 'xhs-account',         // 小红书账号
-  WechatArticle = 'wechat-article'  // 公众号文章（内容/数据完整性取决于采集方式）
+  WechatArticle = 'wechat-article',   // 公众号文章（内容/数据完整性取决于采集方式）
+  FeishuDoc = 'feishu-doc'            // 飞书文档
 }
 
 // 存储源类型
@@ -166,7 +185,7 @@ export interface SaveResult {
 export interface StoreAdapter {
   save(
     type: CollectionType,
-    data: XiaohongshuNote | XiaohongshuAccount | XiaohongshuNote[] | WechatArticle[],
+    data: XiaohongshuNote | XiaohongshuAccount | XiaohongshuNote[] | WechatArticle[] | FeishuDoc | FeishuDoc[],
     store: StoreConfig,
     fromTabId?: number
   ): Promise<SaveResult | SaveResult[]>
@@ -176,6 +195,7 @@ export interface StoreAdapter {
 export enum MessageTypes {
   StoreCrawlData = 'cjdb-store-crawl-data',
   ShowPanelTip = 'cjdb-show-panel-tip',
+  HTTPRequest = 'cjdb-http-request',
   DajialaPostHistory = 'cjdb-dajiala-post-history',
   DajialaArticleData = 'cjdb-dajiala-article-data',
   DajialaPrincipalInfo = 'cjdb-dajiala-principal-info',

@@ -19,9 +19,11 @@ import { XiaohongshuFeedCrawler } from '@/crawlers/XiaohongshuFeedCrawler'
 import { XiaohongshuAccountCrawler } from '@/crawlers/XiaohongshuAccountCrawler'
 import { WechatArticleCrawler } from '@/crawlers/WechatArticleCrawler'
 import { WechatAccountHistoryCrawler } from '@/crawlers/WechatAccountHistoryCrawler'
+import { FeishuDocCrawler } from '@/crawlers/FeishuDocCrawler'
+import { ensureFeishuRuntimeBridge, isFeishuDocUrl } from '@/utils/feishuRuntime'
 
 export default defineContentScript({
-  matches: ['https://www.xiaohongshu.com/*', 'https://xhslink.com/*', 'https://mp.weixin.qq.com/*'],
+  matches: ['https://www.xiaohongshu.com/*', 'https://xhslink.com/*', 'https://mp.weixin.qq.com/*', 'https://*.feishu.cn/*'],
 
   main() {
     console.log('[CJDB] Content script loaded')
@@ -32,7 +34,8 @@ export default defineContentScript({
       new XiaohongshuFeedCrawler(),
       new XiaohongshuAccountCrawler(),
       new WechatArticleCrawler(),
-      new WechatAccountHistoryCrawler()
+      new WechatAccountHistoryCrawler(),
+      new FeishuDocCrawler()
     ]
 
     let currentCrawlers: typeof crawlers = []
@@ -41,6 +44,12 @@ export default defineContentScript({
     // 识别并激活对应的 Crawler
     function checkAndInit() {
       const url = location.href
+
+      if (isFeishuDocUrl(url)) {
+        ensureFeishuRuntimeBridge().catch((error) => {
+          console.warn('[CJDB] 飞书 runtime bridge 注入失败:', error)
+        })
+      }
 
       // 找到能处理当前 URL 的所有 Crawler
       const crawlersMatch = crawlers.filter((c) => c.canHandle(url))

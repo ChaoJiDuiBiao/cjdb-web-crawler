@@ -1,10 +1,15 @@
 import type { XiaohongshuNote } from '@/types'
 import { CollectionType } from '@/types'
+import { parseDateTime, formatDate } from '@/utils/dateTimeParse'
 
 interface NoteCollectionItem {
   no: number
   checked: boolean
   title: string
+  coverUrl?: string
+  likes?: number
+  authorNickname?: string
+  publishTimeStr?: string
 }
 
 /**
@@ -37,22 +42,35 @@ export class XiaohongshuFeedCrawler {
     this.noteCollection.forEach((item, url) => {
       if (!item.checked) return
 
-      const noteId = url.match(/\/explore\/([\w-]+)/)?.[1] || ''
-      const link = document.querySelector(`a[href*="/explore/${noteId}"]`)
+      const noteId = this.extractNoteIdFromUrl(url)
+      const link = this.findNoteLinkInDom(url, noteId)
       if (!link) {
         results.push({
           url,
           noteId,
           searchKeyword,
-          title: item.title,
+          title: item.title || '',
+          likes: item.likes,
+          coverUrl: item.coverUrl,
+          imageUrls: item.coverUrl,
+          authorNickname: item.authorNickname,
+          publishTimeStr: item.publishTimeStr,
           source: 'dom',
           crawledAt: new Date().toISOString()
         })
         return
       }
 
-      const card = link.closest('.note-item, [class*="note-item"], [class*="note-card"], .cover') || link.parentElement || link
+      const card = this.resolveCardContainer(link as HTMLElement)
       const data = this.extractFromCard(card as HTMLElement, url, searchKeyword)
+      if (!data.title) data.title = item.title || ''
+      if (!data.likes && item.likes != null) data.likes = item.likes
+      if (!data.coverUrl && item.coverUrl) {
+        data.coverUrl = item.coverUrl
+        data.imageUrls = item.coverUrl
+      }
+      if (!data.authorNickname && item.authorNickname) data.authorNickname = item.authorNickname
+      if (!data.publishTimeStr && item.publishTimeStr) data.publishTimeStr = item.publishTimeStr
       results.push(data)
     })
 
@@ -63,6 +81,7 @@ export class XiaohongshuFeedCrawler {
 
   marker(): void {
     const url = location.href
+    const searchKeyword = this.getSearchKeyword()
 
     if (url !== this.lastFeedUrl) {
       this.noteCollection.clear()
@@ -76,16 +95,31 @@ export class XiaohongshuFeedCrawler {
 
     noteItems.forEach(item => {
       const noteUrl = this.getNoteUrl(item)
-      if (!noteUrl || this.noteCollection.has(noteUrl)) return
+      if (!noteUrl) return
 
-      this.noteCounter++
-      this.noteCollection.set(noteUrl, {
-        no: this.noteCounter,
-        checked: true,
-        title: item.querySelector('.title, .note-title, [class*="title"]')?.textContent?.trim() || ''
-      })
-      // 每标记一条就更新提示（使用 updateKey 更新同一个 tip）
-      ;(window as any).CJDB_TipsDisplay?.(`已标记 ${this.noteCounter} 条搜索结果`, true, 'marker-feed')
+      const snapshot = this.extractFromCard(item, noteUrl, searchKeyword)
+      const existing = this.noteCollection.get(noteUrl)
+
+      if (!existing) {
+        this.noteCounter++
+        this.noteCollection.set(noteUrl, {
+          no: this.noteCounter,
+          checked: true,
+          title: snapshot.title || item.querySelector('.title, .note-title, [class*="title"]')?.textContent?.trim() || '',
+          coverUrl: snapshot.coverUrl,
+          likes: snapshot.likes,
+          authorNickname: snapshot.authorNickname,
+          publishTimeStr: snapshot.publishTimeStr
+        })
+        // 每标记一条就更新提示（使用 updateKey 更新同一个 tip）
+        ;(window as any).CJDB_TipsDisplay?.(`已标记 ${this.noteCounter} 条搜索结果`, true, 'marker-feed')
+      } else {
+        if (!existing.title && snapshot.title) existing.title = snapshot.title
+        if (!existing.coverUrl && snapshot.coverUrl) existing.coverUrl = snapshot.coverUrl
+        if ((existing.likes == null || existing.likes === 0) && snapshot.likes != null) existing.likes = snapshot.likes
+        if (!existing.authorNickname && snapshot.authorNickname) existing.authorNickname = snapshot.authorNickname
+        if (!existing.publishTimeStr && snapshot.publishTimeStr) existing.publishTimeStr = snapshot.publishTimeStr
+      }
     })
 
     noteItems.forEach(item => {
@@ -113,32 +147,16 @@ export class XiaohongshuFeedCrawler {
   }
 
   private getAllNoteItems(): HTMLElement[] {
-    const links = document.querySelectorAll('a[href*="/explore/"]')
+    const links = document.querySelectorAll('a[href*="/search_result/"], a[href*="/explore/"]')
     const cards = new Map<string, HTMLElement>()
 
     for (const link of links) {
-      const href = link.getAttribute('href')
-      if (!href || !/\/explore\/[\w-]+/.test(href)) continue
-
-      const noteId = href.match(/\/explore\/([\w-]+)/)?.[1]
+      const normalizedUrl = this.normalizeNoteUrl((link as HTMLAnchorElement).href || link.getAttribute('href') || '')
+      if (!normalizedUrl) continue
+      const noteId = this.extractNoteIdFromUrl(normalizedUrl)
       if (!noteId) continue
 
-      let card = link.closest('.note-item, [class*="note-item"], [class*="note-card"], .cover') as HTMLElement
-      if (!card) {
-        if (link.querySelector('img') || link.querySelector('video')) {
-          card = link as HTMLElement
-        } else {
-          let el = link.parentElement
-          while (el && el !== document.body) {
-            if (el.querySelector('img') || el.querySelector('video')) {
-              card = el
-              break
-            }
-            el = el.parentElement
-          }
-          if (!card) card = link.parentElement as HTMLElement
-        }
-      }
+      const card = this.resolveCardContainer(link as HTMLElement)
 
       if (card && card !== document.body && !cards.has(noteId)) {
         cards.set(noteId, card)
@@ -149,30 +167,20 @@ export class XiaohongshuFeedCrawler {
   }
 
   private getNoteUrl(item: HTMLElement): string {
-    const link = item.querySelector('a[href*="/explore/"]') as HTMLAnchorElement
-    if (link?.href) return link.href.split('?')[0]
-    if (item.tagName === 'A' && (item as HTMLAnchorElement).href) {
-      return (item as HTMLAnchorElement).href.split('?')[0]
-    }
-
-    let p = item.parentElement
-    for (let d = 0; d < 6 && p; d++) {
-      if (p.tagName === 'A' && (p as HTMLAnchorElement).href?.includes('/explore/')) {
-        return (p as HTMLAnchorElement).href.split('?')[0]
-      }
-      p = p.parentElement
-    }
-    return ''
+    const preferred = this.findPreferredNoteLink(item)
+    return preferred ? this.normalizeNoteUrl(preferred.href) : ''
   }
 
   private extractFromCard(card: HTMLElement, url: string, searchKeyword: string): XiaohongshuNote {
-    const noteId = url.match(/\/explore\/([\w-]+)/)?.[1] || ''
+    const noteId = this.extractNoteIdFromUrl(url)
     const title = card.querySelector('.title, .note-title, [class*="title"]')?.textContent?.trim() || ''
-    const coverImg = card.querySelector('img') as HTMLImageElement
+    const coverImg = card.querySelector(
+      'a.cover img, a[class*="cover"] img, img[data-xhs-img], .cover img, [class*="cover"] img, img'
+    ) as HTMLImageElement
     const coverUrl = coverImg?.src || coverImg?.dataset?.src || ''
-    const authorNickname = card.querySelector(
-      '.author .name, .author-name, .user-name, [class*="author"] [class*="name"], [class*="user"] [class*="name"]'
-    )?.textContent?.trim() || ''
+    const authorNickname = this.extractAuthorNickname(card)
+    const publishTimeRaw = this.extractPublishTimeText(card)
+    const publishTimeStr = this.normalizePublishTime(publishTimeRaw)
 
     const parseCount = (text: string): number => {
       const match = text.match(/(\d+\.?\d*)(k|w|万|千)?/i)
@@ -193,6 +201,7 @@ export class XiaohongshuFeedCrawler {
       searchKeyword,
       title,
       likes,
+      publishTimeStr: publishTimeStr || undefined,
       authorNickname: authorNickname || undefined,
       coverUrl: coverUrl || undefined,
       imageUrls: coverUrl,
@@ -201,19 +210,204 @@ export class XiaohongshuFeedCrawler {
     }
   }
 
+  private extractAuthorNickname(card: HTMLElement): string {
+    const wrapper = this.findNameTimeWrapper(card)
+    if (wrapper) {
+      const direct = Array.from(wrapper.children).find((el) => el.classList.contains('name')) as HTMLElement | undefined
+      const directText = direct?.textContent?.trim() || ''
+      if (directText) return directText
+
+      const nested = wrapper.querySelector('.name') as HTMLElement | null
+      const nestedText = nested?.textContent?.trim() || ''
+      if (nestedText) return nestedText
+    }
+
+    return ''
+  }
+
+  private extractPublishTimeText(card: HTMLElement): string {
+    const wrapper = this.findNameTimeWrapper(card)
+    if (wrapper) {
+      const direct = Array.from(wrapper.children).find((el) => el.classList.contains('time')) as HTMLElement | undefined
+      const directText = direct?.textContent?.trim() || ''
+      if (directText) return directText
+
+      const nested = wrapper.querySelector('.time') as HTMLElement | null
+      const nestedText = nested?.textContent?.trim() || ''
+      if (nestedText) return nestedText
+    }
+
+    return ''
+  }
+
+  private findNameTimeWrapper(card: HTMLElement): HTMLElement | null {
+    const wrappers = Array.from(card.querySelectorAll('.name-time-wrapper')) as HTMLElement[]
+    for (const wrapper of wrappers) {
+      const hasName = !!Array.from(wrapper.children).find((el) => el.classList.contains('name')) || !!wrapper.querySelector('.name')
+      const hasTime = !!Array.from(wrapper.children).find((el) => el.classList.contains('time')) || !!wrapper.querySelector('.time')
+      if (hasName && hasTime) {
+        return wrapper
+      }
+    }
+    return null
+  }
+
+  private normalizePublishTime(raw: string): string {
+    const text = String(raw || '').replace(/·/g, ' ').trim()
+    if (!text) return ''
+
+    const direct = parseDateTime(text)
+    if (direct) return formatDate(direct)
+
+    const fallback = text.match(/(\d+\s*(分钟前|小时前|天前|周前|星期前)|昨天\s*\d{1,2}:\d{2}|今天\s*\d{1,2}:\d{2}|\d{1,2}-\d{1,2}|\d{1,2}月\d{1,2}日(?:\s*\d{1,2}:\d{2})?)/)
+    if (fallback?.[1]) {
+      const parsed = parseDateTime(fallback[1])
+      if (parsed) return formatDate(parsed)
+    }
+
+    return ''
+  }
+
+  private isNoteHref(href: string): boolean {
+    return /\/search_result\/[\w-]+/.test(href) || /\/explore\/[\w-]+/.test(href)
+  }
+
+  private findNoteLinkInDom(targetUrl: string, noteId: string): HTMLAnchorElement | null {
+    const normalizedTarget = this.normalizeNoteUrl(targetUrl)
+    const links = document.querySelectorAll('a[href*="/search_result/"], a[href*="/explore/"]')
+
+    if (normalizedTarget) {
+      for (const a of links) {
+        const link = a as HTMLAnchorElement
+        const normalized = this.normalizeNoteUrl(link.href || link.getAttribute('href') || '')
+        if (normalized && normalized === normalizedTarget) return link
+      }
+    }
+
+    if (noteId) {
+      for (const a of links) {
+        const link = a as HTMLAnchorElement
+        const href = link.href || link.getAttribute('href') || ''
+        if (href.includes(`/search_result/${noteId}`) || href.includes(`/explore/${noteId}`)) return link
+      }
+    }
+
+    return null
+  }
+
+  private normalizeNoteUrl(href: string): string {
+    try {
+      const u = new URL(href, location.origin)
+      if (!this.isNoteHref(u.pathname)) return ''
+      u.hash = ''
+      return u.toString()
+    } catch {
+      return ''
+    }
+  }
+
+  private extractNoteIdFromUrl(url: string): string {
+    const m = url.match(/\/(?:search_result|explore)\/([\w-]+)/)
+    return m?.[1] || ''
+  }
+
+  private findPreferredNoteLink(root: HTMLElement): HTMLAnchorElement | null {
+    const candidates: HTMLAnchorElement[] = []
+
+    if (root.tagName === 'A') {
+      const self = root as HTMLAnchorElement
+      if (self.href && this.isNoteHref(self.href)) candidates.push(self)
+    }
+
+    const nested = root.querySelectorAll('a[href*="/search_result/"], a[href*="/explore/"]')
+    nested.forEach((a) => {
+      const el = a as HTMLAnchorElement
+      if (el.href && this.isNoteHref(el.href)) candidates.push(el)
+    })
+
+    let p = root.parentElement
+    for (let d = 0; d < 6 && p; d++) {
+      if (p.tagName === 'A') {
+        const a = p as HTMLAnchorElement
+        if (a.href && this.isNoteHref(a.href)) candidates.push(a)
+      }
+      p = p.parentElement
+    }
+
+    if (candidates.length === 0) return null
+
+    candidates.sort((a, b) => this.noteLinkScore(b) - this.noteLinkScore(a))
+    return candidates[0]
+  }
+
+  private noteLinkScore(a: HTMLAnchorElement): number {
+    let score = 0
+    const href = a.href || ''
+    if (/\/search_result\/[\w-]+/.test(href)) score += 50
+    if (href.includes('xsec_token=')) score += 100
+    if (a.className.includes('cover')) score += 20
+    return score
+  }
+
+  private resolveCardContainer(linkEl: HTMLElement): HTMLElement {
+    let el: HTMLElement | null = linkEl
+    let fallback: HTMLElement = linkEl
+
+    for (let depth = 0; depth < 8 && el && el !== document.body; depth++) {
+      const hasMedia = !!el.querySelector('img, video')
+      const hasTitle = !!el.querySelector('.title, .note-title, [class*="title"]')
+      const hasAuthorOrTime = !!el.querySelector(
+        '.name-time-wrapper .name, .name-time-wrapper .time, .author .name, .author-name, .time'
+      )
+      if (hasMedia) fallback = el
+      if (hasMedia && (hasTitle || hasAuthorOrTime)) {
+        return el
+      }
+      el = el.parentElement
+    }
+
+    return fallback
+  }
+
   private getSearchKeyword(): string {
+    const decodeKeyword = (raw: string): string => {
+      let value = String(raw || '').trim()
+      if (!value) return ''
+
+      // 最多解码 2 次，兼容 keyword=%25E7...（解码后变成 %E7...）场景
+      for (let i = 0; i < 2; i++) {
+        try {
+          const decoded = decodeURIComponent(value)
+          if (!decoded || decoded === value) break
+          value = decoded
+        } catch {
+          break
+        }
+      }
+
+      return value.trim()
+    }
+
+    // 1) 优先从 DOM 搜索输入框读取
+    const input = document.querySelector(
+      'input[type="search"], input[placeholder*="搜索"], input[class*="search"], input[id*="search"]'
+    ) as HTMLInputElement | null
+    if (input?.value?.trim()) {
+      const fromDom = decodeKeyword(input.value)
+      if (fromDom) return fromDom
+    }
+
+    // 2) 其次从 URL 参数读取
     const url = new URL(location.href)
     const candidates = [
       url.searchParams.get('keyword'),
       url.searchParams.get('q'),
       url.searchParams.get('query')
     ]
-      .map(v => (v || '').trim())
+      .map(v => decodeKeyword(v || ''))
       .filter(Boolean)
-    if (candidates.length > 0) return candidates[0]
 
-    const input = document.querySelector('input[type="search"], input[placeholder*="搜索"], input[class*="search"]') as HTMLInputElement | null
-    if (input?.value?.trim()) return input.value.trim()
+    if (candidates.length > 0) return candidates[0]
 
     return document.title.replace(' - 小红书', '').trim()
   }

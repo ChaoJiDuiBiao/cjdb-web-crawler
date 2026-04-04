@@ -5,6 +5,7 @@ interface NoteCollectionItem {
   no: number
   checked: boolean
   title: string
+  likes?: number
 }
 
 /**
@@ -92,16 +93,25 @@ export class XiaohongshuAccountCrawler {
 
     noteItems.forEach(item => {
       const noteUrl = this.getNoteUrl(item)
-      if (!noteUrl || this.noteCollection.has(noteUrl)) return
+      if (!noteUrl) return
 
-      this.noteCounter++
-      this.noteCollection.set(noteUrl, {
-        no: this.noteCounter,
-        checked: true,
-        title: item.querySelector('.title, .note-title, [class*="title"]')?.textContent?.trim() || ''
-      })
-      // 每标记一条就更新提示（使用 updateKey 更新同一个 tip）
-      ;(window as any).CJDB_TipsDisplay?.(`已标记 ${this.noteCounter} 条笔记`, true, 'marker-account')
+      const snapshot = this.extractFromCard(item)
+      const existing = this.noteCollection.get(noteUrl)
+
+      if (!existing) {
+        this.noteCounter++
+        this.noteCollection.set(noteUrl, {
+          no: this.noteCounter,
+          checked: true,
+          title: snapshot.title,
+          likes: snapshot.likes
+        })
+        // 每标记一条就更新提示（使用 updateKey 更新同一个 tip）
+        ;(window as any).CJDB_TipsDisplay?.(`已标记 ${this.noteCounter} 条笔记`, true, 'marker-account')
+      } else {
+        if (!existing.title && snapshot.title) existing.title = snapshot.title
+        if ((existing.likes == null || existing.likes === 0) && snapshot.likes != null) existing.likes = snapshot.likes
+      }
     })
 
     noteItems.forEach(item => {
@@ -173,7 +183,7 @@ export class XiaohongshuAccountCrawler {
   }
 
   private formatNoteListText(): string {
-    const noteItems: Array<{ no: number; title: string; url: string; checked: boolean }> = []
+    const noteItems: Array<{ no: number; title: string; url: string; checked: boolean; likes?: number }> = []
 
     this.noteCollection.forEach((item, url) => {
       if (item.checked) {
@@ -181,7 +191,8 @@ export class XiaohongshuAccountCrawler {
           no: item.no,
           title: item.title || '未知标题',
           url,
-          checked: item.checked
+          checked: item.checked,
+          likes: item.likes
         })
       }
     })
@@ -192,7 +203,15 @@ export class XiaohongshuAccountCrawler {
 
     const totalCached = this.noteCollection.size
     const checkedCount = noteItems.length
-    return `识别到 ${totalCached} 条，采集 ${checkedCount} 条`
+    const lines = [`识别到 ${totalCached} 条，采集 ${checkedCount} 条`]
+
+    noteItems.forEach(({ no, title, url, likes }) => {
+      const safeTitle = this.escapeMarkdownText(title || '未知标题')
+      const suffix = likes != null && likes > 0 ? ` | 点赞 ${likes}` : ''
+      lines.push(`#${no} [${safeTitle}](${url})${suffix}`)
+    })
+
+    return lines.join('\n')
   }
 
   private getCheckedNoteCount(): number {
@@ -204,17 +223,15 @@ export class XiaohongshuAccountCrawler {
   }
 
   private getAllNoteItems(): HTMLElement[] {
-    const links = document.querySelectorAll('a[href*="/explore/"]')
+    const links = document.querySelectorAll('a[href*="/explore/"], a[href*="/discovery/item/"]')
     const cards = new Map<string, HTMLElement>()
 
     for (const link of links) {
-      const href = link.getAttribute('href')
-      if (!href || !/\/explore\/[\w-]+/.test(href)) continue
-
-      const noteId = href.match(/\/explore\/([\w-]+)/)?.[1]
+      const noteUrl = this.normalizeNoteUrl((link as HTMLAnchorElement).href || link.getAttribute('href') || '')
+      const noteId = noteUrl.match(/\/explore\/([\w-]+)/)?.[1]
       if (!noteId) continue
 
-      let card = link.closest('.note-item, [class*="note-item"], [class*="note-card"], .cover') as HTMLElement
+      let card = link.closest('.note-item, [class*="note-item"], [class*="note-card"], article, section, li, .cover') as HTMLElement
       if (!card) {
         if (link.querySelector('img') || link.querySelector('video')) {
           card = link as HTMLElement
@@ -240,20 +257,84 @@ export class XiaohongshuAccountCrawler {
   }
 
   private getNoteUrl(item: HTMLElement): string {
-    const link = item.querySelector('a[href*="/explore/"]') as HTMLAnchorElement
-    if (link?.href) return link.href.split('?')[0]
+    const link = item.querySelector('a[href*="/explore/"], a[href*="/discovery/item/"]') as HTMLAnchorElement
+    if (link?.href) return this.normalizeNoteUrl(link.href)
     if (item.tagName === 'A' && (item as HTMLAnchorElement).href) {
-      return (item as HTMLAnchorElement).href.split('?')[0]
+      return this.normalizeNoteUrl((item as HTMLAnchorElement).href)
     }
 
     let p = item.parentElement
     for (let d = 0; d < 6 && p; d++) {
-      if (p.tagName === 'A' && (p as HTMLAnchorElement).href?.includes('/explore/')) {
-        return (p as HTMLAnchorElement).href.split('?')[0]
+      if (p.tagName === 'A' && /(\/explore\/|\/discovery\/item\/)/.test((p as HTMLAnchorElement).href || '')) {
+        return this.normalizeNoteUrl((p as HTMLAnchorElement).href)
       }
       p = p.parentElement
     }
     return ''
+  }
+
+  private extractFromCard(item: HTMLElement): { title: string; likes?: number } {
+    const title = this.extractTitle(item)
+    const likes = this.extractLikes(item)
+    return {
+      title: title || '未知标题',
+      likes
+    }
+  }
+
+  private extractTitle(item: HTMLElement): string {
+    const titleSelectors = [
+      '.title',
+      '.note-title',
+      '[class*="title"]',
+      '[class*="desc"]',
+      'img[alt]'
+    ]
+
+    for (const selector of titleSelectors) {
+      const el = item.querySelector(selector) as HTMLElement | HTMLImageElement | null
+      if (!el) continue
+      const text = el instanceof HTMLImageElement ? (el.alt || '').trim() : (el.textContent || '').trim()
+      if (text) return text.replace(/\s+/g, ' ').trim()
+    }
+
+    return ''
+  }
+
+  private extractLikes(item: HTMLElement): number | undefined {
+    const likeSelectors = [
+      '.like-wrapper .count',
+      '.like-count',
+      '[class*="like"] [class*="count"]',
+      '[class*="like-count"]',
+      '.count'
+    ]
+
+    for (const selector of likeSelectors) {
+      const el = item.querySelector(selector) as HTMLElement | null
+      const text = el?.textContent?.trim() || ''
+      if (!text) continue
+      const likes = this.parseCount(text)
+      if (likes > 0) return likes
+    }
+
+    return undefined
+  }
+
+  private normalizeNoteUrl(url: string): string {
+    const cleanUrl = String(url || '').split('#')[0].split('?')[0]
+    const match = cleanUrl.match(/\/(?:explore|discovery\/item)\/([\w-]+)/)
+    return match ? `https://www.xiaohongshu.com/explore/${match[1]}` : ''
+  }
+
+  private escapeMarkdownText(text: string): string {
+    return String(text || '')
+      .replace(/\[/g, '［')
+      .replace(/\]/g, '］')
+      .replace(/\(/g, '（')
+      .replace(/\)/g, '）')
+      .replace(/\s+/g, ' ')
+      .trim()
   }
 
   private injectNoteMarker(item: HTMLElement, label: string, url: string, entry: NoteCollectionItem): void {

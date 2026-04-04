@@ -73,7 +73,7 @@ export const STORE_SCHEMA: Record<
     label: 'Notion',
     fields: [
       { key: 'token', label: 'Token', inputType: 'password' },
-      { key: 'databaseId', label: 'Database ID', inputType: 'text' }
+      { key: 'databaseId', label: 'Database ID / URL', inputType: 'text' }
     ],
     getDisplayLabel: (s) => {
       const name = (s.config as any)?.name?.trim()

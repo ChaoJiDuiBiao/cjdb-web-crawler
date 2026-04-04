@@ -160,6 +160,39 @@ export default defineBackground(() => {
         return true
       }
 
+      // HTTP 代理请求（用于解决 Panel/content context 的 CORS）
+      if (message.type === MessageTypes.HTTPRequest) {
+        ;(async () => {
+          try {
+            const { url, init } = (message.payload || {}) as { url?: string; init?: RequestInit }
+            if (!url) {
+              sendResponse({ ok: false, error: '缺少 URL' })
+              return
+            }
+
+            // Limited proxy: AbortSignal/streaming not supported
+            const reqInit = init || {}
+            // Ensure we don't accidentally forward extension/user cookies.
+            if (!reqInit.credentials) reqInit.credentials = 'omit'
+
+            const res = await fetch(url, reqInit)
+            const body = await res.arrayBuffer()
+            const headers: Array<[string, string]> = []
+            res.headers.forEach((v, k) => headers.push([k, v]))
+            sendResponse({
+              ok: true,
+              status: res.status,
+              statusText: res.statusText,
+              headers,
+              body
+            })
+          } catch (e: any) {
+            sendResponse({ ok: false, error: e?.message || '请求失败' })
+          }
+        })()
+        return true
+      }
+
       // 存储请求
       if (message.type !== MessageTypes.StoreCrawlData) return false
 

@@ -18,13 +18,13 @@ export default defineConfig({
     // 固定扩展 ID，避免路径变更导致 storage 丢失
     key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwHhl57Hg2u291PVeL6X1GTJgUjsul5WeQaVER4vHKVTUnraQ7I2PI8rPCo0TsRJTNix7ikHTiaIBGG3PGtzp5jy0q3FbqCleMRFka4Daywk3dDHHXcBr/Jkp4RxOsJumq4haM+1yPhMZjTmT99K06sXWcfuRcIW4HqCEYNtsMWllF/7XtpKWF97GmfYz0AorXZKPtdswipMloRmYNYHpft8htS3SIc8J9/tjlsQHp6G+nyYgLw1X1kIoCSwvlRC/aMGqlei/sTdZWvSecq5XidaDDb7fAOJGQFfE6V+LsKCRntY0uwa722JVd0ZHQFtCOF8QKWiGDJRgcAk8k0ozSQIDAQAB',
     name: 'CJDB 数据抓取',
-    description: '小红书、公众号数据采集工具',
+    description: '小红书、公众号、飞书文档采集工具',
     permissions: ['storage', 'activeTab'],
     // content.css 需可被 Shadow DOM 内 link 加载，用于样式隔离
     web_accessible_resources: [
       {
         matches: ['<all_urls>'],
-        resources: ['content-scripts/content.css']
+        resources: ['content-scripts/content.css', 'feishu-runtime-bridge.js']
       }
     ],
     host_permissions: [
@@ -34,6 +34,7 @@ export default defineConfig({
       'https://*.xhscdn.net/*',
       'https://xhslink.com/*',
       'https://mp.weixin.qq.com/*',
+      'https://*.feishu.cn/*',
       'https://www.dajiala.com/*',
       'https://api.notion.com/*',
       'https://open.feishu.cn/*'
