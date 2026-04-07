@@ -86,12 +86,12 @@ export const STORE_SCHEMA: Record<
     fields: [
       { key: 'appId', label: 'App ID', inputType: 'text' },
       { key: 'appSecret', label: 'App Secret', inputType: 'password' },
-      { key: 'appToken', label: 'App Token', inputType: 'text' },
-      { key: 'tableId', label: 'Table ID', inputType: 'text' }
+      { key: 'wikiUrl', label: '多维表格链接（飞书 Wiki 页面 URL）', inputType: 'text' }
     ],
     getDisplayLabel: (s) => {
       const name = (s.config as any)?.name?.trim()
-      const fallback = (s.config as any)?.tableId || '...'
+      const wikiUrl = String((s.config as any)?.wikiUrl ?? '')
+      const fallback = wikiUrl ? wikiUrl.slice(0, 30) + '…' : '...'
       return name ? `飞书 \\ ${name}` : `飞书 \\ ${fallback}`
     }
   }

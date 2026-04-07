@@ -1069,10 +1069,19 @@ async function removeStoreAt(index: number) {
 }
 
 // 校验当前存储源是否已配置
-function isStoreConfigured(store: { type: string; token?: string; databaseId?: string; appId?: string; appSecret?: string; appToken?: string; tableId?: string }): boolean {
+function isStoreConfigured(store: { type: string; token?: string; databaseId?: string; appId?: string; appSecret?: string; wikiUrl?: string; appToken?: string; tableId?: string }): boolean {
   if (store.type === 'local') return false // 本地存储未实现
   if (store.type === 'notion') return !!(store.token?.trim() && parseNotionDatabaseId(store.databaseId))
-  if (store.type === 'feishu') return !!(store.appId?.trim() && store.appSecret?.trim() && store.appToken?.trim() && store.tableId?.trim())
+  if (store.type === 'feishu') {
+    return !!(
+      store.appId?.trim() &&
+      store.appSecret?.trim() &&
+      (
+        store.wikiUrl?.trim() ||
+        (store.appToken?.trim() && store.tableId?.trim())
+      )
+    )
+  }
   return false
 }
 

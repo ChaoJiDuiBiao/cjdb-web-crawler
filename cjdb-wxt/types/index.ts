@@ -168,8 +168,9 @@ export interface StoreConfig {
   // 飞书配置
   appId?: string
   appSecret?: string
-  appToken?: string
-  tableId?: string
+  wikiUrl?: string   // 飞书 Wiki 页面 URL（含 ?table=xxx），自动解析 app_token 和 table_id
+  appToken?: string  // 可选，直接填写时跳过 wiki 解析
+  tableId?: string   // 可选，直接填写时跳过 URL 解析
 }
 
 // 存储结果
