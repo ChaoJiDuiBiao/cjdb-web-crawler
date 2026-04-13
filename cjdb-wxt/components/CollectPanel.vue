@@ -101,7 +101,8 @@
               :key="storeType"
               :label="STORE_SCHEMA[storeType]?.label ?? storeType"
               :value="storeType"
-              :disabled="STORE_SCHEMA[storeType]?.disabled" />
+              :disabled="STORE_SCHEMA[storeType]?.disabled"
+            />
           </el-select>
         </el-form-item>
 
@@ -112,7 +113,8 @@
           <el-select
             v-if="field.inputType === 'select'"
             v-model="configForm[field.key]"
-            style="width: 100%">
+            style="width: 100%"
+            :teleported="false">
             <el-option
               v-for="opt in field.options ?? []"
               :key="opt.value"
@@ -1711,6 +1713,11 @@ onMounted(async () => {
 .cjdb-config-dialog .el-dialog__body {
   min-height: 200px !important;
   overflow: visible !important;
+}
+
+/* teleported=false 的下拉渲染在 dialog 内，需确保父容器不裁切 */
+.cjdb-config-dialog .el-select__popper {
+  z-index: 10 !important;
 }
 
 /* 数据库备注弹窗：层级高于配置弹窗，确保盖在前一个弹窗之上 */
