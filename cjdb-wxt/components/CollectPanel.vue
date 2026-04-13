@@ -17,7 +17,7 @@
         class="store-item"
         :class="{ active: store.is_selected }"
         @click="selectStore(index)">
-        <span class="store-item-label">{{ storeConfig.getStoreLabel(store as Store) }}</span>
+        <span class="store-item-label" style="color:black" >{{ storeConfig.getStoreLabel(store as Store) }}</span>
         <el-dropdown
           trigger="click"
           placement="bottom-end"
@@ -109,7 +109,18 @@
           v-for="field in STORE_SCHEMA[configForm.type as StoreType]?.fields ?? []"
           :key="field.key"
           :label="field.label">
+          <el-select
+            v-if="field.inputType === 'select'"
+            v-model="configForm[field.key]"
+            style="width: 100%">
+            <el-option
+              v-for="opt in field.options ?? []"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value" />
+          </el-select>
           <el-input
+            v-else
             v-model="configForm[field.key]"
             :type="field.inputType || 'text'" />
         </el-form-item>
@@ -325,6 +336,7 @@ import { Setting, EditPen, Delete, MoreFilled, ArrowDown } from '@element-plus/i
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeCrawlData } from '@/stores/Store'
 import { storeConfig, STORE_SCHEMA } from '@/config/StoreConfig'
+import { exportFile } from '@/utils/exportFile'
 import { getDajialaApiKey, setDajialaApiKey, augmentWechatArticlesWithApiData, augmentWechatArticlesWithPrincipalInfo, fetchPrincipalInfo } from '@/utils/dajialaApi'
 import { _fetch } from '@/utils/_fetch'
 import { parseNotionDatabaseId } from '@/utils/notion'
@@ -947,9 +959,14 @@ async function selectStore(index: number) {
   showStoreSelector.value = false
 }
 
-// 类型变化时重置表单
+// 类型变化时重置表单，并预填各字段默认值
 function handleTypeChange() {
-  configForm.value = { type: configForm.value.type }
+  const type = configForm.value.type
+  const defaults: Record<string, unknown> = { type }
+  for (const field of STORE_SCHEMA[type as StoreType]?.fields ?? []) {
+    defaults[field.key] = field.defaultValue ?? ''
+  }
+  configForm.value = defaults as { type: StoreType; [k: string]: unknown }
 }
 
 // 打开添加配置弹窗（与小红书完全相同的逻辑）
@@ -1015,8 +1032,8 @@ function skipRemark() {
 // 添加/编辑存储源
 async function saveConfig() {
   const { type, ...config } = configForm.value
-  if (type === StoreType.Local || STORE_SCHEMA[type as StoreType]?.disabled) {
-    ElMessage.warning('本地存储暂未实现')
+  if (STORE_SCHEMA[type as StoreType]?.disabled) {
+    ElMessage.warning('该存储类型暂不可用')
     return
   }
   if (type === StoreType.Notion) {
@@ -1070,7 +1087,7 @@ async function removeStoreAt(index: number) {
 
 // 校验当前存储源是否已配置
 function isStoreConfigured(store: { type: string; token?: string; databaseId?: string; appId?: string; appSecret?: string; wikiUrl?: string; appToken?: string; tableId?: string }): boolean {
-  if (store.type === 'local') return false // 本地存储未实现
+  if (store.type === 'local') return true // 本地存储无需填写配置，直接可用
   if (store.type === 'notion') return !!(store.token?.trim() && parseNotionDatabaseId(store.databaseId))
   if (store.type === 'feishu') {
     return !!(
@@ -1192,6 +1209,14 @@ async function confirmAndSave(options: PreviewConfirmOptions = {}) {
 
     showPreview.value = false
     clearTipMessage()
+
+    // 本地存储：按 exportFormat 触发文件下载（DOM 操作只能在 content script 侧执行）
+    for (const r of results) {
+      const res = r as any
+      if (res.exportFormat && res.exportData && res.exportType) {
+        exportFile(res.exportType, res.exportData, res.exportFormat)
+      }
+    }
 
     const pageIds = results.filter((r) => r.pageId).map((r) => r.pageId as string)
     const pageIdSuffix =

@@ -56,7 +56,9 @@ function ensureStoresByType(val: unknown): Record<string, Store[]> {
 export interface StoreTypeField {
   key: string
   label: string
-  inputType?: 'text' | 'password'
+  inputType?: 'text' | 'password' | 'select'
+  options?: { value: string; label: string }[]
+  defaultValue?: string
 }
 
 export const STORE_SCHEMA: Record<
@@ -64,10 +66,26 @@ export const STORE_SCHEMA: Record<
   { label: string; fields: StoreTypeField[]; getDisplayLabel: (s: Store) => string; disabled?: boolean }
 > = {
   [StoreType.Local]: {
-    label: '本地存储（未实现）',
-    fields: [],
-    getDisplayLabel: () => '本地存储（未实现）',
-    disabled: true
+    label: '本地存储',
+    fields: [
+      {
+        key: 'exportFormat',
+        label: '导出格式',
+        inputType: 'select',
+        defaultValue: '',
+        options: [
+          { value: '', label: '仅保存（不导出文件）' },
+          { value: 'csv', label: 'CSV（Excel 可直接打开）' },
+          { value: 'markdown', label: 'Markdown（Obsidian Database 格式）' }
+        ]
+      }
+    ],
+    getDisplayLabel: (s) => {
+      const fmt = (s.config as any)?.exportFormat
+      if (fmt === 'csv') return '本地存储 \\ CSV'
+      if (fmt === 'markdown') return '本地存储 \\ Markdown'
+      return '本地存储'
+    }
   },
   [StoreType.Notion]: {
     label: 'Notion',
@@ -120,7 +138,6 @@ export async function initStoreConfig() {
             .map((item: any, i: number) => {
               if (!item || typeof item !== 'object') return null
               const { type, ...config } = item
-              if (type === StoreType.Local || type === 'local') return null
               return {
                 type: type as StoreType,
                 is_selected: i === idx,
