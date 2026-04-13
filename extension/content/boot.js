@@ -167,11 +167,11 @@
       const dataType = modal.dataset.dataType;
       const editIndex = parseInt(modal.dataset.editIndex, 10);
       const storeType = modal.querySelector('[name="storeType"]').value;
-      const inputs = modal.querySelectorAll('.cjdb-modal-form-body input');
+      const inputs = modal.querySelectorAll('.cjdb-modal-form-body input, .cjdb-modal-form-body select');
       const config = { type: storeType };
 
       inputs.forEach(inp => {
-        if (inp.name && inp.value) config[inp.name] = inp.value;
+        if (inp.name) config[inp.name] = inp.value;
       });
 
       const stores = await window.StorageConfig?.getStoresForType(dataType);

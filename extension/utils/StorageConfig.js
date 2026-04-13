@@ -24,10 +24,13 @@
   };
   /** 配置表单显示名称（可选） */
   const SCHEMA_LABELS = {
-    notion: { token: 'API Token', databaseId: 'Database ID（或数据库 URL）' }
+    notion: { token: 'API Token', databaseId: 'Database ID（或数据库 URL）' },
+    local: { exportFormat: '导出格式' }
   };
 
-  const LOCAL_SCHEMA = {};
+  const LOCAL_SCHEMA = {
+    exportFormat: '' // '' = 仅存储  'csv' = 同时下载 CSV  'markdown' = 同时下载 Markdown
+  };
 
   const SCHEMA_MAP = {
     feishu: FEISHU_SCHEMA,

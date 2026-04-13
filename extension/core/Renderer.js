@@ -134,7 +134,11 @@ class Renderer {
 
   _getStoreLabel(store) {
     if (!store) return '未配置';
-    if (store.type === 'local') return '本地';
+    if (store.type === 'local') {
+      const fmtMap = { csv: '→CSV', markdown: '→MD' };
+      const fmt = fmtMap[store.exportFormat] || '';
+      return '本地' + fmt;
+    }
     if (store.type === 'feishu') return store.appToken ? `飞书:${store.tableId || '...'}` : '飞书';
     if (store.type === 'notion') return store.databaseId ? `Notion:${store.databaseId.slice(0, 8)}...` : 'Notion';
     return store.type;
@@ -287,11 +291,11 @@ class Renderer {
     const dataType = modal.dataset.dataType;
     const editIndex = parseInt(modal.dataset.editIndex, 10);
     const storeType = modal.querySelector('[name="storeType"]').value;
-    const inputs = modal.querySelectorAll('.cjdb-modal-form-body input');
+    const inputs = modal.querySelectorAll('.cjdb-modal-form-body input, .cjdb-modal-form-body select');
     const config = { type: storeType };
 
     inputs.forEach(inp => {
-      if (inp.name && inp.value) config[inp.name] = inp.value;
+      if (inp.name) config[inp.name] = inp.value;
     });
 
     const stores = await window.StorageConfig?.getStoresForType(dataType);
@@ -316,7 +320,18 @@ class Renderer {
   _createConfigForm(storeType, existing) {
     const schema = window.StorageConfig?.SCHEMA_MAP?.[storeType];
     if (!schema) return '';
-    if (storeType === 'local') return '<p class="cjdb-page-type">本地存储无需配置</p>';
+    if (storeType === 'local') {
+      const cur = existing?.exportFormat || '';
+      return `
+        <div class="cjdb-modal-field">
+          <label>导出格式</label>
+          <select name="exportFormat">
+            <option value=""${cur === '' ? ' selected' : ''}>仅保存（不导出文件）</option>
+            <option value="csv"${cur === 'csv' ? ' selected' : ''}>CSV（Excel 可直接打开）</option>
+            <option value="markdown"${cur === 'markdown' ? ' selected' : ''}>Markdown（Obsidian Database 格式）</option>
+          </select>
+        </div>`;
+    }
 
     const labels = window.StorageConfig?.SCHEMA_LABELS?.[storeType] || {};
     let html = '';

@@ -12,6 +12,13 @@
         const key = `cjdb_local_${type}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
         await chrome.storage.local.set({ [key]: data });
         console.log('[LocalStore] 已保存到本地:', key, data);
+
+        // 按配置触发文件下载
+        const fmt = store?.exportFormat;
+        if (fmt === 'csv' || fmt === 'markdown') {
+          window.ExportUtils?.download(type, data, fmt);
+        }
+
         return { ok: true, action: 'create', key };
       } catch (e) {
         console.error('[LocalStore] 保存失败:', e);

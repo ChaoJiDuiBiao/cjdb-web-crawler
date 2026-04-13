@@ -41,6 +41,7 @@
         "libs/element-plus.full.js",
         "utils/validators.js",
         "utils/StorageConfig.js",
+        "utils/ExportUtils.js",
         "utils/fetchProxy.js",
         "utils/api.js",
         "schemas/xiaohongshu-note.js",
