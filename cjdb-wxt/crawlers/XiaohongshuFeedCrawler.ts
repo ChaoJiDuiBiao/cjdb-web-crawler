@@ -6,6 +6,7 @@ interface NoteCollectionItem {
   no: number
   checked: boolean
   title: string
+  searchKeyword: string   // marker 时锁定的关键词，不随后续搜索变化
   coverUrl?: string
   likes?: number
   authorNickname?: string
@@ -20,6 +21,7 @@ export class XiaohongshuFeedCrawler {
   noteCollection: Map<string, NoteCollectionItem> = new Map()
   noteCounter = 0
   lastFeedUrl = ''
+  lastSearchKeyword = ''   // marker 时记录的最新关键词
 
   canHandle(url: string): boolean {
     return /xiaohongshu\.com\/explore(?:\?|$)/.test(url) ||
@@ -33,14 +35,18 @@ export class XiaohongshuFeedCrawler {
       ;(window as any).CJDB_TipsDisplay?.(msg, false)
     }
 
-    const searchKeyword = this.getSearchKeyword()
+    // 用 marker 时锁定的关键词，避免用户切换搜索后 crawl 拿到错误的词
+    const currentKeyword = this.lastSearchKeyword || this.getSearchKeyword()
 
-    showTip(`正在采集搜索结果${searchKeyword ? `（${searchKeyword}）` : ''}...`)
+    showTip(`正在采集搜索结果${currentKeyword ? `（${currentKeyword}）` : ''}...`)
 
     const results: XiaohongshuNote[] = []
 
     this.noteCollection.forEach((item, url) => {
       if (!item.checked) return
+
+      // 每条笔记使用自身 marker 时锁定的 searchKeyword
+      const searchKeyword = item.searchKeyword || currentKeyword
 
       const noteId = this.extractNoteIdFromUrl(url)
       const link = this.findNoteLinkInDom(url, noteId)
@@ -83,10 +89,12 @@ export class XiaohongshuFeedCrawler {
     const url = location.href
     const searchKeyword = this.getSearchKeyword()
 
-    if (url !== this.lastFeedUrl) {
+    // URL 或关键词任一变化，都重置采集列表
+    if (url !== this.lastFeedUrl || searchKeyword !== this.lastSearchKeyword) {
       this.noteCollection.clear()
       this.noteCounter = 0
       this.lastFeedUrl = url
+      this.lastSearchKeyword = searchKeyword
     }
 
     this.injectMarkerStyles()
@@ -105,6 +113,7 @@ export class XiaohongshuFeedCrawler {
         this.noteCollection.set(noteUrl, {
           no: this.noteCounter,
           checked: true,
+          searchKeyword,
           title: snapshot.title || item.querySelector('.title, .note-title, [class*="title"]')?.textContent?.trim() || '',
           coverUrl: snapshot.coverUrl,
           likes: snapshot.likes,
