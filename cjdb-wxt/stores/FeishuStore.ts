@@ -286,8 +286,13 @@ async function createTableField(
   )
   const data = await resp.json()
   if (data.code !== 0) {
-    // 字段已存在时飞书返回 1254040，忽略
+    // 1254040：字段已存在，忽略
     if (data.code === 1254040) return
+    // 91403：app 缺少表结构编辑权限，跳过并警告（后续写入已有列）
+    if (data.code === 91403) {
+      console.warn(`[FeishuStore] 无权创建字段 "${fieldName}"，将跳过（请在飞书手动建列，或在开发者后台开启"编辑多维表格"权限）`)
+      return
+    }
     throw new Error(`创建字段 "${fieldName}" 失败(code=${data.code}): ${data.msg || JSON.stringify(data)}`)
   }
 }
@@ -305,7 +310,8 @@ async function ensureFields(
   const existingNames = new Set(tableFields.map((f) => f.field_name))
 
   const missing = Object.keys(rawFields).filter(
-    (name) => !existingNames.has(name) && schema[name] !== undefined
+    // '标题' 是飞书每张表的内置主键列，已自动存在，不通过 API 创建（会 91403）
+    (name) => name !== '标题' && !existingNames.has(name) && schema[name] !== undefined
   )
 
   if (missing.length > 0) {
@@ -492,8 +498,8 @@ export const feishuStore: StoreAdapter = {
     // 支持批量（数组）和单条数据
     const items: any[] = Array.isArray(data) ? data : [data]
 
-    // ── 对非账号类型，按 searchKeyword 分组写入不同 sheet ──
-    if (type !== 'xhs-account') {
+    // ── 仅搜索结果页（xhs-feed）按 searchKeyword 分组写入不同 sheet ──
+    if (type === 'xhs-feed') {
       // 以 wikiUrl 解析 appToken（不依赖 wikiUrl 中的 tableId 参数）
       const appToken = await resolveAppToken(store)
 
@@ -539,21 +545,24 @@ export const feishuStore: StoreAdapter = {
       return allResults.length === 1 ? allResults[0] : allResults
     }
 
-    // ── 账号类型：沿用原逻辑（直接写入配置指定的 table） ──
+    // ── 其余类型（xhs-note-detail、xhs-account 等）：写入配置指定的 table ──
     const { appToken, tableId } = await resolveConfig(store)
 
-    const firstRawFields = accountToRawFields(items[0] as XiaohongshuAccount)
+    const toRawFields = type === 'xhs-account'
+      ? (item: any) => accountToRawFields(item as XiaohongshuAccount)
+      : (item: any) => noteToRawFields(item as XiaohongshuNote)
+
+    const firstRawFields = toRawFields(items[0])
     const tableFields = await ensureFields(accessToken, appToken, tableId, firstRawFields, schema)
 
     const records: Array<Record<string, any>> = []
     for (const item of items) {
-      const rawFields = accountToRawFields(item as XiaohongshuAccount)
-      const record = buildFeishuRecord(rawFields, tableFields)
+      const record = buildFeishuRecord(toRawFields(item), tableFields)
       if (Object.keys(record).length > 0) records.push(record)
     }
 
     if (records.length === 0) {
-      return { ok: false, error: '没有可写入的字段（请检查表格列名是否与数据字段匹配）' }
+      return { ok: false, error: '没有可写入的字段（飞书表格中未找到匹配的列名，请手动在表格中创建对应列，或在飞书开发者后台开启"编辑多维表格"权限）' }
     }
 
     const BATCH_SIZE = 500
