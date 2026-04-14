@@ -1,16 +1,19 @@
 <template>
   <div class="cjdb-panel">
-    <!-- 存储配置按钮 -->
-    <el-button
-      circle
-      size="small"
-      :icon="Setting"
-      @click="showStoreSelector = !showStoreSelector"
-      class="store-btn">
-    </el-button>
+    <!-- 存储配置入口：hover 展示存储源列表 -->
+    <div
+      class="store-entry"
+      @mouseenter="showStoreSelector = true"
+      @mouseleave="showStoreSelector = false">
 
-    <!-- 存储源选择下拉 -->
-    <div v-if="showStoreSelector" class="store-selector">
+      <!-- 触发按钮 -->
+      <div class="store-trigger" @click="showStoreSelector = !showStoreSelector">
+        <el-icon class="store-trigger-icon"><Setting /></el-icon>
+        <span v-if="currentStoreName" class="store-trigger-label">{{ currentStoreName }}</span>
+      </div>
+
+      <!-- 存储源选择下拉 -->
+      <div v-show="showStoreSelector" class="store-selector">
       <div
         v-for="(store, index) in storesList"
         :key="index"
@@ -44,6 +47,7 @@
         + 添加存储源
       </div>
     </div>
+    </div><!-- /store-entry -->
 
 
     <!-- 公众号：当前文章 | 历史文章 -->
@@ -398,6 +402,12 @@ const currentCollectionType = computed(
 // 按 CollectionType 动态筛选的 store 列表
 const storesList = computed(() => storeConfig.getStoresByCollectionType(currentCollectionType.value))
 const currentStoreIdx = computed(() => storeConfig.getCurrentStoreIndex(currentCollectionType.value))
+
+// 当前选中存储源的显示名称（用于 hover 时展示）
+const currentStoreName = computed(() => {
+  const store = storesList.value.find((s) => s.is_selected)
+  return store ? storeConfig.getStoreLabel(store as Store) : ''
+})
 
 // 采集中/保存中时的按钮文字
 const collectingPhaseText = computed(() =>
@@ -1492,19 +1502,57 @@ onMounted(async () => {
   &.checked { background: #ecf5ff; }
 }
 
-.store-btn {
-  opacity: 0.7;
+.store-entry {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.store-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  transition: box-shadow 0.2s, background 0.2s;
+  backdrop-filter: blur(4px);
+
   &:hover {
-    opacity: 1;
+    background: #fff;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
   }
 }
 
+.store-trigger-icon {
+  font-size: 22px;
+  color: #409eff;
+  flex-shrink: 0;
+}
+
+.store-trigger-label {
+  font-size: 12px;
+  color: #606266;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1;
+}
+
 .store-selector {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
   padding: 8px;
   background: #fff;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   min-width: 180px;
+  z-index: 10;
 }
 
 .store-item {
