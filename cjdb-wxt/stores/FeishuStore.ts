@@ -124,6 +124,199 @@ async function resolveConfig(store: StoreConfig): Promise<{ appToken: string; ta
   return result
 }
 
+// ─── 附件上传常量 ───
+const FEISHU_FILE_MAX_SIZE = 20 * 1024 * 1024  // 20 MB
+const IMAGE_FETCH_TIMEOUT_MS = 20_000
+const DEFAULT_IMAGE_UPLOAD_CONCURRENCY = 4
+const DEFAULT_IMAGE_UPLOAD_RETRY = 1
+
+// ─── 附件上传辅助 ───
+
+// 将逗号分隔字符串或数组转为去重 URL 数组
+function normalizeFileUrls(value: unknown): string[] {
+  const out: string[] = []
+  const append = (v: unknown) => {
+    if (typeof v !== 'string') return
+    for (const p of v.split(',').map((s) => s.trim()).filter(Boolean)) out.push(p)
+  }
+  if (Array.isArray(value)) value.forEach(append)
+  else append(value)
+  return Array.from(new Set(out))
+}
+
+// 从 content-type 推断扩展名
+function extFromContentType(ct: string): string {
+  if (ct.includes('png'))  return 'png'
+  if (ct.includes('gif'))  return 'gif'
+  if (ct.includes('webp')) return 'webp'
+  if (ct.includes('heic')) return 'heic'
+  return 'jpg'
+}
+
+// 从 URL 推断文件名，格式 image-1.jpg
+function inferFilenameFromUrl(url: string, index: number, contentType = ''): string {
+  const fallback = `image-${index + 1}.${extFromContentType(contentType)}`
+  try {
+    const u = new URL(url)
+    const raw = decodeURIComponent(u.pathname.split('/').pop() || '')
+    if (!raw) return fallback
+    // 去掉非安全字符
+    const safe = raw.replace(/[^\w.\-]/g, '_').replace(/_{2,}/g, '_')
+    if (/\.\w{2,5}$/.test(safe)) return safe
+    return `${safe}.${extFromContentType(contentType)}`
+  } catch {
+    return fallback
+  }
+}
+
+// 下载图片为 Blob（与 NotionStore 逻辑相同：优先 force-cache，超时 20s）
+async function downloadImageBlob(url: string): Promise<{ blob: Blob; contentType: string }> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS)
+
+  const fetchWith = async (cacheMode: RequestCache) => {
+    const response = await fetch(url, {
+      method: 'GET',
+      credentials: 'omit',
+      headers: { Accept: 'image/*,*/*;q=0.8' },
+      referrer: 'https://www.xiaohongshu.com/',
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      cache: cacheMode,
+      signal: controller.signal
+    })
+    if (!response.ok) throw new Error(`下载失败: ${response.status}`)
+    const blob = await response.blob()
+    if (!blob || blob.size <= 0) throw new Error('下载为空文件')
+    const contentType = response.headers.get('content-type') || blob.type || 'image/jpeg'
+    return { blob, contentType }
+  }
+
+  try {
+    try {
+      return await fetchWith('force-cache')
+    } catch (e: any) {
+      if (controller.signal.aborted) throw e
+      return await fetchWith('default')
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// 并发控制：限制同时执行的任务数
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (!Array.isArray(items) || items.length === 0) return []
+  const limit = Math.max(1, Math.min(concurrency || 1, items.length))
+  const results: R[] = new Array(items.length)
+  let cursor = 0
+  const runners = Array.from({ length: limit }, async () => {
+    while (true) {
+      const i = cursor++
+      if (i >= items.length) return
+      results[i] = await worker(items[i], i)
+    }
+  })
+  await Promise.all(runners)
+  return results
+}
+
+// 上传单张图片到飞书云文档，返回 file_token
+async function uploadImageToFeishu(
+  accessToken: string,
+  appToken: string,
+  blob: Blob,
+  filename: string
+): Promise<string> {
+  const form = new FormData()
+  form.append('file_name', filename)
+  form.append('parent_type', 'bitable_file')
+  form.append('parent_node', appToken)
+  form.append('size', String(blob.size))
+  form.append('file', blob, filename)
+
+  const resp = await fetch(`${FEISHU_API_BASE}/drive/v1/medias/upload_all`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: form
+  })
+  const data = await resp.json()
+  if (data.code !== 0) {
+    throw new Error(`飞书文件上传失败(code=${data.code}): ${data.msg || JSON.stringify(data)}`)
+  }
+  const token = data.data?.file_token as string | undefined
+  if (!token) throw new Error('飞书文件上传响应缺少 file_token')
+  return token
+}
+
+// 批量下载并上传图片，返回成功的 file_token[]（失败的跳过，不降级）
+async function uploadImagesByUrlToFeishu(
+  accessToken: string,
+  appToken: string,
+  urls: string[],
+  opts?: { concurrency?: number; retry?: number }
+): Promise<string[]> {
+  if (urls.length === 0) return []
+  const retry = Math.max(0, opts?.retry ?? DEFAULT_IMAGE_UPLOAD_RETRY)
+
+  const results = await runWithConcurrency(
+    urls,
+    opts?.concurrency ?? DEFAULT_IMAGE_UPLOAD_CONCURRENCY,
+    async (url, index) => {
+      let lastError: any = null
+      for (let attempt = 0; attempt <= retry; attempt++) {
+        try {
+          const { blob, contentType } = await downloadImageBlob(url)
+          if (blob.size > FEISHU_FILE_MAX_SIZE) {
+            throw new Error(`图片超过 20MB，当前 ${(blob.size / 1024 / 1024).toFixed(2)}MB`)
+          }
+          const filename = inferFilenameFromUrl(url, index, contentType)
+          const token = await uploadImageToFeishu(accessToken, appToken, blob, filename)
+          return token
+        } catch (e: any) {
+          lastError = e
+          if (attempt < retry) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)))
+        }
+      }
+      console.warn('[FeishuStore] 图片上传失败，跳过:', url, lastError?.message || lastError)
+      return null
+    }
+  )
+
+  return results.filter((t): t is string => t !== null)
+}
+
+// 处理 rawFields 中所有附件字段：下载 + 上传，返回 fieldName → file_token[] 映射
+async function resolveAttachments(
+  accessToken: string,
+  appToken: string,
+  rawFields: Record<string, any>,
+  schema: Record<string, number>,
+  downloadImages: boolean
+): Promise<Record<string, string[]>> {
+  const attachmentMap: Record<string, string[]> = {}
+
+  for (const [fieldName, value] of Object.entries(rawFields)) {
+    if (schema[fieldName] !== FIELD_TYPE.ATTACHMENT) continue
+    if (!downloadImages) {
+      attachmentMap[fieldName] = []
+      continue
+    }
+    const urls = normalizeFileUrls(value)
+    if (urls.length === 0) {
+      attachmentMap[fieldName] = []
+      continue
+    }
+    console.log(`[FeishuStore] 上传附件字段 "${fieldName}"，共 ${urls.length} 张`)
+    attachmentMap[fieldName] = await uploadImagesByUrlToFeishu(accessToken, appToken, urls)
+  }
+
+  return attachmentMap
+}
+
 // ─── 多 Sheet（数据表）管理：以 searchKeyword 为 key ───
 
 // 列出 app 下所有数据表
@@ -243,8 +436,8 @@ const NOTE_FIELD_SCHEMA: Record<string, number> = {
   '作者昵称': FIELD_TYPE.TEXT,
   '作者粉丝量': FIELD_TYPE.NUMBER,
   '作者获赞量': FIELD_TYPE.NUMBER,
-  '封面URL': FIELD_TYPE.URL,
-  '图片URLs': FIELD_TYPE.TEXT,
+  '封面': FIELD_TYPE.ATTACHMENT,
+  '图片': FIELD_TYPE.ATTACHMENT,
   '标签': FIELD_TYPE.MULTI_SELECT,
   '搜索关键词': FIELD_TYPE.TEXT,
   '搜索排名': FIELD_TYPE.NUMBER,
@@ -264,6 +457,7 @@ const ACCOUNT_FIELD_SCHEMA: Record<string, number> = {
   '笔记数': FIELD_TYPE.NUMBER,
   '采集时间': FIELD_TYPE.TEXT,
   '笔记列表': FIELD_TYPE.TEXT,
+  '头像': FIELD_TYPE.ATTACHMENT,
 }
 
 // 创建单个字段
@@ -354,8 +548,9 @@ function buildFieldValue(fieldType: number, value: any): any {
     case FIELD_TYPE.CHECKBOX:
       return Boolean(value)
     case FIELD_TYPE.ATTACHMENT:
-      // 当前未实现飞书文件上传，避免把字符串/URL 直接写进附件字段导致 1254068
-      return undefined
+      // ATTACHMENT 字段的值由 resolveAttachments 预处理为 file_token[]，此处直接格式化
+      if (!Array.isArray(value) || value.length === 0) return undefined
+      return (value as string[]).map((token) => ({ file_token: token }))
     default:
       // 未知类型：尝试纯文本
       return String(value)
@@ -409,8 +604,8 @@ function noteToRawFields(note: XiaohongshuNote): Record<string, any> {
   if (note.authorNickname)   fields['作者昵称'] = note.authorNickname
   if (note.authorFansCount != null) fields['作者粉丝量'] = note.authorFansCount
   if (note.authorLikes != null) fields['作者获赞量'] = note.authorLikes
-  if (note.coverUrl)         fields['封面URL'] = note.coverUrl
-  if (note.imageUrls)        fields['图片URLs'] = note.imageUrls
+  if (note.coverUrl)          fields['封面'] = note.coverUrl
+  if (note.imageUrls)         fields['图片'] = note.imageUrls
   if (note.tags?.length)     fields['标签'] = note.tags
   if (note.searchKeyword)    fields['搜索关键词'] = note.searchKeyword
   if (note.rank != null)     fields['搜索排名'] = note.rank
@@ -446,14 +641,19 @@ function accountToRawFields(account: XiaohongshuAccount): Record<string, any> {
   // 笔记列表：用换行符分割的纯文本，存入单个字段
   if (account.noteListText)     fields['笔记列表'] = account.noteListText
 
+  // 头像：URL 字符串，后续由 resolveAttachments 上传为附件
+  if (account.avatarUrl)        fields['头像'] = account.avatarUrl
+
   return fields
 }
 
 // ─── 核心：将原始字段映射到飞书字段格式 ───
 // tableFields: 从 API 获取的字段列表，用于匹配类型
+// attachmentMap: 已预先上传完毕的附件字段 → file_token[] 映射
 function buildFeishuRecord(
   rawFields: Record<string, any>,
-  tableFields: Array<{ field_id: string; field_name: string; type: number }>
+  tableFields: Array<{ field_id: string; field_name: string; type: number }>,
+  attachmentMap: Record<string, string[]> = {}
 ): Record<string, any> {
   const fieldByName = new Map(tableFields.map((f) => [f.field_name, f]))
   const record: Record<string, any> = {}
@@ -465,7 +665,9 @@ function buildFeishuRecord(
       console.warn(`[FeishuStore] 字段 "${name}" 在表格中不存在，已跳过`)
       continue
     }
-    const built = buildFieldValue(fieldDef.type, value)
+    // ATTACHMENT 字段从 attachmentMap 取已上传的 token 列表
+    const inputValue = fieldDef.type === FIELD_TYPE.ATTACHMENT ? (attachmentMap[name] ?? []) : value
+    const built = buildFieldValue(fieldDef.type, inputValue)
     if (built !== undefined) {
       record[name] = built
     }
@@ -527,7 +729,9 @@ export const feishuStore: StoreAdapter = {
         const records: Array<Record<string, any>> = []
         for (const item of groupItems) {
           const rawFields = noteToRawFields(item)
-          const record = buildFeishuRecord(rawFields, tableFields)
+          const downloadImages = item.downloadImages !== false
+          const attachmentMap = await resolveAttachments(accessToken, appToken, rawFields, schema, downloadImages)
+          const record = buildFeishuRecord(rawFields, tableFields, attachmentMap)
           if (Object.keys(record).length > 0) records.push(record)
         }
 
@@ -561,7 +765,10 @@ export const feishuStore: StoreAdapter = {
 
     const records: Array<Record<string, any>> = []
     for (const item of items) {
-      const record = buildFeishuRecord(toRawFields(item), tableFields)
+      const rawFields = toRawFields(item)
+      const downloadImages = item.downloadImages !== false
+      const attachmentMap = await resolveAttachments(accessToken, appToken, rawFields, schema, downloadImages)
+      const record = buildFeishuRecord(rawFields, tableFields, attachmentMap)
       if (Object.keys(record).length > 0) records.push(record)
     }
 
