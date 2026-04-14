@@ -30,6 +30,7 @@ async function getTenantAccessToken(appId: string, appSecret: string): Promise<s
 
 // ─── wiki URL 解析 ───
 // 支持格式：https://{host}/wiki/{wikiToken}?table={tableId}&view={viewId}
+// tableId 为可选（按 keyword 动态路由时无需指定）
 function parseWikiUrl(wikiUrl: string): { wikiToken: string; tableId: string } {
   let url: URL
   try {
@@ -45,11 +46,7 @@ function parseWikiUrl(wikiUrl: string): { wikiToken: string; tableId: string } {
     throw new Error(`无法从链接中提取 Wiki Token: ${wikiUrl}`)
   }
   const wikiToken = parts[wikiIdx + 1]
-
   const tableId = url.searchParams.get('table') || ''
-  if (!tableId) {
-    throw new Error(`飞书 Wiki 链接缺少 table 参数: ${wikiUrl}`)
-  }
 
   return { wikiToken, tableId }
 }
@@ -73,7 +70,30 @@ async function getAppTokenFromWiki(accessToken: string, wikiToken: string): Prom
   return node.obj_token as string
 }
 
-// ─── 解析配置：从 wikiUrl 解析出 appToken + tableId ───
+// ─── 解析配置：从 wikiUrl 解析出 appToken（不含 tableId） ───
+const resolvedAppTokenCache = new Map<string, string>()
+
+async function resolveAppToken(store: StoreConfig): Promise<string> {
+  if (store.appToken) return store.appToken
+
+  if (!store.wikiUrl) {
+    throw new Error('飞书配置缺少多维表格链接（wikiUrl）')
+  }
+
+  const cacheKey = store.wikiUrl
+  if (resolvedAppTokenCache.has(cacheKey)) {
+    return resolvedAppTokenCache.get(cacheKey)!
+  }
+
+  const { wikiToken } = parseWikiUrl(store.wikiUrl)
+  const accessToken = await getTenantAccessToken(store.appId!, store.appSecret!)
+  const appToken = await getAppTokenFromWiki(accessToken, wikiToken)
+
+  resolvedAppTokenCache.set(cacheKey, appToken)
+  return appToken
+}
+
+// ─── 解析配置（兼容旧逻辑）：从 wikiUrl 解析出 appToken + 默认 tableId ───
 const resolvedCache = new Map<string, { appToken: string; tableId: string }>()
 
 async function resolveConfig(store: StoreConfig): Promise<{ appToken: string; tableId: string }> {
@@ -93,12 +113,88 @@ async function resolveConfig(store: StoreConfig): Promise<{ appToken: string; ta
   }
 
   const { wikiToken, tableId } = parseWikiUrl(store.wikiUrl)
+  if (!tableId) {
+    throw new Error(`飞书 Wiki 链接缺少 table 参数（账号类型需要指定目标数据表）: ${store.wikiUrl}`)
+  }
   const accessToken = await getTenantAccessToken(store.appId!, store.appSecret!)
   const appToken = await getAppTokenFromWiki(accessToken, wikiToken)
 
   const result = { appToken, tableId }
   resolvedCache.set(cacheKey, result)
   return result
+}
+
+// ─── 多 Sheet（数据表）管理：以 searchKeyword 为 key ───
+
+// 列出 app 下所有数据表
+async function listTables(
+  accessToken: string,
+  appToken: string
+): Promise<Array<{ table_id: string; name: string }>> {
+  const resp = await fetch(
+    `${FEISHU_API_BASE}/bitable/v1/apps/${appToken}/tables`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  )
+  const data = await resp.json()
+  if (data.code !== 0) {
+    throw new Error(`获取飞书数据表列表失败(code=${data.code}): ${data.msg || JSON.stringify(data)}`)
+  }
+  return data.data?.items ?? []
+}
+
+// 创建新数据表（sheet）
+async function createTable(
+  accessToken: string,
+  appToken: string,
+  name: string
+): Promise<string> {
+  const resp = await fetch(
+    `${FEISHU_API_BASE}/bitable/v1/apps/${appToken}/tables`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ table: { name } })
+    }
+  )
+  const data = await resp.json()
+  if (data.code !== 0) {
+    throw new Error(`创建飞书数据表 "${name}" 失败(code=${data.code}): ${data.msg || JSON.stringify(data)}`)
+  }
+  return data.data?.table_id as string
+}
+
+// 表名 → tableId 缓存（appToken 级别隔离）
+const tableIdByName = new Map<string, string>()
+
+// 根据 keyword 查找或创建对应数据表，返回 tableId
+async function resolveTableIdByKeyword(
+  accessToken: string,
+  appToken: string,
+  keyword: string
+): Promise<string> {
+  const cacheKey = `${appToken}:${keyword}`
+  if (tableIdByName.has(cacheKey)) {
+    return tableIdByName.get(cacheKey)!
+  }
+
+  // 拉取所有已有数据表，查找同名表
+  const tables = await listTables(accessToken, appToken)
+  const existing = tables.find((t) => t.name === keyword)
+
+  let tableId: string
+  if (existing) {
+    console.log(`[FeishuStore] 复用已有数据表 "${keyword}" (${existing.table_id})`)
+    tableId = existing.table_id
+  } else {
+    console.log(`[FeishuStore] 数据表 "${keyword}" 不存在，自动创建`)
+    tableId = await createTable(accessToken, appToken, keyword)
+  }
+
+  tableIdByName.set(cacheKey, tableId)
+  return tableId
 }
 
 // ─── 飞书多维表格 API ───
@@ -391,45 +487,75 @@ export const feishuStore: StoreAdapter = {
     }
 
     const accessToken = await getTenantAccessToken(store.appId, store.appSecret)
-    const { appToken, tableId } = await resolveConfig(store)
+    const schema = type === 'xhs-account' ? ACCOUNT_FIELD_SCHEMA : NOTE_FIELD_SCHEMA
 
     // 支持批量（数组）和单条数据
     const items: any[] = Array.isArray(data) ? data : [data]
 
-    // 先收集所有原始字段（取第一条即可，字段名相同）
-    const firstItem = items[0]
-    let firstRawFields: Record<string, any>
-    const schema = type === 'xhs-account' ? ACCOUNT_FIELD_SCHEMA : NOTE_FIELD_SCHEMA
-    if (type === 'xhs-account') {
-      firstRawFields = accountToRawFields(firstItem as XiaohongshuAccount)
-    } else {
-      firstRawFields = noteToRawFields(firstItem as XiaohongshuNote)
+    // ── 对非账号类型，按 searchKeyword 分组写入不同 sheet ──
+    if (type !== 'xhs-account') {
+      // 以 wikiUrl 解析 appToken（不依赖 wikiUrl 中的 tableId 参数）
+      const appToken = await resolveAppToken(store)
+
+      // 按 searchKeyword 分组（无关键词的归入 fallback 组）
+      const groups = new Map<string, XiaohongshuNote[]>()
+      for (const item of items as XiaohongshuNote[]) {
+        const keyword = item.searchKeyword?.trim() || '未分类'
+        if (!groups.has(keyword)) groups.set(keyword, [])
+        groups.get(keyword)!.push(item)
+      }
+
+      const allResults: SaveResult[] = []
+
+      for (const [keyword, groupItems] of groups) {
+        // 查找或创建以关键词命名的数据表
+        const tableId = await resolveTableIdByKeyword(accessToken, appToken, keyword)
+
+        const firstRawFields = noteToRawFields(groupItems[0])
+        const tableFields = await ensureFields(accessToken, appToken, tableId, firstRawFields, schema)
+
+        const records: Array<Record<string, any>> = []
+        for (const item of groupItems) {
+          const rawFields = noteToRawFields(item)
+          const record = buildFeishuRecord(rawFields, tableFields)
+          if (Object.keys(record).length > 0) records.push(record)
+        }
+
+        if (records.length === 0) {
+          allResults.push({ ok: false, error: `关键词 "${keyword}" 没有可写入的字段` })
+          continue
+        }
+
+        const BATCH_SIZE = 500
+        for (let i = 0; i < records.length; i += BATCH_SIZE) {
+          const batch = records.slice(i, i + BATCH_SIZE)
+          await batchCreateRecords(accessToken, appToken, tableId, batch)
+          for (const _ of batch) {
+            allResults.push({ ok: true, action: 'create' })
+          }
+        }
+      }
+
+      return allResults.length === 1 ? allResults[0] : allResults
     }
 
-    // 确保字段存在（缺失则自动创建）
+    // ── 账号类型：沿用原逻辑（直接写入配置指定的 table） ──
+    const { appToken, tableId } = await resolveConfig(store)
+
+    const firstRawFields = accountToRawFields(items[0] as XiaohongshuAccount)
     const tableFields = await ensureFields(accessToken, appToken, tableId, firstRawFields, schema)
 
     const records: Array<Record<string, any>> = []
     for (const item of items) {
-      let rawFields: Record<string, any>
-
-      if (type === 'xhs-account') {
-        rawFields = accountToRawFields(item as XiaohongshuAccount)
-      } else {
-        rawFields = noteToRawFields(item as XiaohongshuNote)
-      }
-
+      const rawFields = accountToRawFields(item as XiaohongshuAccount)
       const record = buildFeishuRecord(rawFields, tableFields)
-      if (Object.keys(record).length > 0) {
-        records.push(record)
-      }
+      if (Object.keys(record).length > 0) records.push(record)
     }
 
     if (records.length === 0) {
       return { ok: false, error: '没有可写入的字段（请检查表格列名是否与数据字段匹配）' }
     }
 
-    // 飞书批量写入上限 500 条，分批处理
     const BATCH_SIZE = 500
     const results: SaveResult[] = []
     for (let i = 0; i < records.length; i += BATCH_SIZE) {
