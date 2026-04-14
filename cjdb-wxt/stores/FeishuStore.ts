@@ -263,6 +263,7 @@ const ACCOUNT_FIELD_SCHEMA: Record<string, number> = {
   '获赞数': FIELD_TYPE.NUMBER,
   '笔记数': FIELD_TYPE.NUMBER,
   '采集时间': FIELD_TYPE.TEXT,
+  '笔记列表': FIELD_TYPE.TEXT,
 }
 
 // 创建单个字段
@@ -441,6 +442,9 @@ function accountToRawFields(account: XiaohongshuAccount): Record<string, any> {
   if (account.likedCount != null)   fields['获赞数'] = account.likedCount
   if (account.notesCount != null)   fields['笔记数'] = account.notesCount
   if (account.crawledAt)        fields['采集时间'] = account.crawledAt
+
+  // 笔记列表：用换行符分割的纯文本，存入单个字段
+  if (account.noteListText)     fields['笔记列表'] = account.noteListText
 
   return fields
 }
