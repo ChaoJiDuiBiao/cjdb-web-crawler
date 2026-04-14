@@ -438,6 +438,7 @@ const NOTE_FIELD_SCHEMA: Record<string, number> = {
   '作者获赞量': FIELD_TYPE.NUMBER,
   '封面': FIELD_TYPE.ATTACHMENT,
   '图片': FIELD_TYPE.ATTACHMENT,
+  '视频': FIELD_TYPE.ATTACHMENT,
   '标签': FIELD_TYPE.MULTI_SELECT,
   '搜索关键词': FIELD_TYPE.TEXT,
   '搜索排名': FIELD_TYPE.NUMBER,
@@ -606,6 +607,7 @@ function noteToRawFields(note: XiaohongshuNote): Record<string, any> {
   if (note.authorLikes != null) fields['作者获赞量'] = note.authorLikes
   if (note.coverUrl)          fields['封面'] = note.coverUrl
   if (note.imageUrls)         fields['图片'] = note.imageUrls
+  if (note.videoUrl)          fields['视频'] = note.videoUrl
   if (note.tags?.length)     fields['标签'] = note.tags
   if (note.searchKeyword)    fields['搜索关键词'] = note.searchKeyword
   if (note.rank != null)     fields['搜索排名'] = note.rank

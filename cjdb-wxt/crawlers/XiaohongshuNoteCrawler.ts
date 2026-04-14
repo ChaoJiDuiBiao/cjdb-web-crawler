@@ -149,6 +149,22 @@ export class XiaohongshuNoteCrawler {
     const coverUrl = imageUrlList[0] || null
     const imageUrls = imageUrlList.length > 0 ? imageUrlList.join(',') : null
 
+    // 视频（优先从 __INITIAL_STATE__ 取，fallback 到 DOM <video>）
+    let videoUrl: string | null = null
+    const videoInfo = noteData?.video || noteData?.videoInfo
+    if (videoInfo) {
+      // 常见路径：video.url / video.media.stream.h264[0].master_url
+      videoUrl = videoInfo.url
+        || videoInfo.media?.stream?.h264?.[0]?.master_url
+        || videoInfo.media?.stream?.h265?.[0]?.master_url
+        || null
+    }
+    if (!videoUrl) {
+      const videoEl = ctx.querySelector('video') as HTMLVideoElement | null
+      videoUrl = videoEl?.src || videoEl?.querySelector('source')?.getAttribute('src') || null
+    }
+    const mediaType: 'image' | 'video' | undefined = videoUrl ? 'video' : (imageUrlList.length > 0 ? 'image' : undefined)
+
     // 标签
     const tags = new Set<string>()
     const detailDesc = ctx.querySelector('#detail-desc')
@@ -245,6 +261,8 @@ export class XiaohongshuNoteCrawler {
       authorFollowing,
       coverUrl,
       imageUrls,
+      videoUrl,
+      mediaType,
       tags: Array.from(tags),
       commentList,
       source: 'dom',
