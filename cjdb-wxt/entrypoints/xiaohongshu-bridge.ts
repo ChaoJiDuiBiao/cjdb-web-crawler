@@ -83,9 +83,8 @@ function respond(noteId: string, noteData: unknown) {
   }
 }
 
-function handleRequest(noteId: string, trigger: 'document' | 'message') {
+function handleRequest(noteId: string, _trigger: 'document' | 'message') {
   const { map, debug } = resolveNoteDetailMap()
-  console.log(LOG, 'cjdb-request-note-detail', { noteId, trigger, stateProbe: debug })
 
   if (!map) {
     console.warn(
@@ -99,14 +98,12 @@ function handleRequest(noteId: string, trigger: 'document' | 'message') {
 
   const direct = map[noteId]
   if (direct != null) {
-    console.log(LOG, 'noteDetailMap 命中 noteId', { noteId })
     respond(noteId, direct)
     return
   }
 
   const lowered = Object.keys(map).find((k) => k.toLowerCase() === noteId.toLowerCase())
   if (lowered) {
-    console.log(LOG, 'noteDetailMap 命中大小写变体', { requested: noteId, key: lowered })
     respond(noteId, map[lowered])
     return
   }
@@ -131,11 +128,6 @@ export default defineContentScript({
   runAt: 'document_idle',
 
   main() {
-    console.log(
-      LOG,
-      'MAIN world 桥已注入：监听 document[cjdb-request-note-detail] 与 window.postMessage(cjdb-ext)；请在本页 DevTools 控制台查看上述日志（扩展隔离控制台里看不到 window.__INITIAL_STATE__）。'
-    )
-
     document.addEventListener('cjdb-request-note-detail', (e: Event) => {
       const noteId = (e as CustomEvent).detail?.noteId as string
       if (!noteId) {

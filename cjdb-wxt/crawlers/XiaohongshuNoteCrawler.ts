@@ -157,11 +157,6 @@ export class XiaohongshuNoteCrawler {
         window.addEventListener('message', onWin)
         const timer = setTimeout(() => {
           if (settled) return
-          console.warn(
-            CJDB_XHS_LOG,
-            `bridge ${BRIDGE_WAIT_MS}ms 内无响应，将尝试 executeScript(MAIN)。若仍失败，在「页面」控制台搜 [CJDB XHS MAIN]。`,
-            { noteId: requestedId, pageUrl: location.href }
-          )
           finish(null)
         }, BRIDGE_WAIT_MS)
         document.dispatchEvent(
@@ -190,14 +185,13 @@ export class XiaohongshuNoteCrawler {
           payload: { noteId }
         })) as { ok?: boolean; noteData?: any; error?: string; reason?: string; keys?: string[] }
         if (r?.ok === true && r.noteData != null) {
-          console.log(CJDB_XHS_LOG, 'noteDetail 已通过 executeScript(MAIN) 取得（bridge 无数据或未响应）')
           noteData = r.noteData
-        } else {
+        } else if (r && !r.ok) {
           console.warn(CJDB_XHS_LOG, 'executeScript(MAIN) 未取到 noteDetail', {
             noteId,
-            reason: r?.reason,
-            keys: r?.keys,
-            error: r?.error
+            reason: r.reason,
+            keys: r.keys,
+            error: r.error
           })
         }
       } catch (err) {
@@ -205,22 +199,10 @@ export class XiaohongshuNoteCrawler {
       }
     }
     if (!noteData) {
-      console.warn(CJDB_XHS_LOG, '桥接返回空：隔离脚本里永远没有页面的 window.__INITIAL_STATE__；需看「页面」控制台里 MAIN bridge 的日志。', {
+      console.warn(CJDB_XHS_LOG, '未取到 noteDetail（bridge 与 executeScript 均无数据）。调试：页面控制台选 top，搜 [CJDB XHS MAIN]。', {
         noteId,
-        pageUrl: location.href,
-        hostname: location.hostname
+        href: location.href
       })
-      console.info(
-        `${CJDB_XHS_LOG} Debug 步骤`,
-        [
-          '1）在本标签页 F12 打开控制台。',
-          '2）控制台左上角「JavaScript 上下文」选 top（页面），不要选扩展名。',
-          '3）过滤框输入：CJDB XHS MAIN。',
-          '4）再点一次采集；应出现 cjdb-request-note-detail 与 stateProbe。',
-          '5）看 stateProbe：hasInitialState=false → 站点未挂或改名；mapKeySample 有键但与 noteId 不一致 → ID 对不上；无任何 MAIN 日志 → bridge 未注入或 URL 不匹配 matches。',
-          '6）chrome://extensions → 本扩展「详细信息」→ 允许访问的网站 / 重新加载扩展后再试。'
-        ].join('\n')
-      )
     }
     // noteDetailMap[id] 的结构是 { note: { video, time, tagList, user, ... } }
     const noteDetail = noteData?.note || noteData
