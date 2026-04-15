@@ -1,7 +1,7 @@
 import { Store } from '@/stores/Store'
 import { notionStore } from '@/stores/NotionStore'
 import { feishuStore } from '@/stores/FeishuStore'
-import { localStore } from '@/stores/LocalStore'
+import { localFileStore } from '@/stores/LocalFileStore'
 import { MessageTypes } from '@/types'
 import type { CollectionType } from '@/types'
 import { storage } from 'wxt/utils/storage'
@@ -21,7 +21,7 @@ const DAJIALA_BASE = 'https://www.dajiala.com'
 const store = new Store()
 store.register('notion', notionStore)
 store.register('feishu', feishuStore)
-store.register('local', localStore)
+store.register('local', localFileStore)
 
 async function getDajialaApiKey(): Promise<string> {
   const key = await storage.getItem(DAJIALA_API_KEY)

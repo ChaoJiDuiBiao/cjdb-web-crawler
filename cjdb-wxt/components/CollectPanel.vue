@@ -66,7 +66,7 @@
       </span>
     </div>
 
-    <!-- 采集按钮：采集大字 + 下方小字类型 -->
+    <!-- 采集按钮：类型大字 + 下方小字"采集" -->
     <el-button
       :type="collecting ? 'warning' : 'primary'"
       :loading="collecting"
@@ -78,8 +78,8 @@
       </template>
       <template v-else>
         <div class="collect-btn-inner">
-          <div class="collect-btn-main">采集</div>
           <div class="collect-btn-type">{{ collectTypeText }}</div>
+          <div class="collect-btn-main">采集</div>
         </div>
       </template>
     </el-button>
@@ -384,7 +384,10 @@ const previewCollectionType = ref<CollectionType | ''>('')
 const configForm = ref<{ type: StoreType; [k: string]: unknown }>({ type: StoreType.Notion })
 
 type PreviewConfirmOptions = {
+  /** 公众号文章：是否下载图片到 Notion */
   downloadImages?: boolean
+  /** 小红书三种采集：是否下载并上传图片/视频（或封面、头像） */
+  downloadImagesAndVideo?: boolean
   extraData?: boolean
   extraPrincipalInfo?: boolean
 }
@@ -1056,6 +1059,41 @@ async function saveConfig() {
     }
     ;(config as Record<string, unknown>).databaseId = notionDbId
   }
+  if (type === StoreType.Feishu) {
+    const feishuCfg = config as Record<string, unknown>
+    if (!String(feishuCfg.appId ?? '').trim()) {
+      ElMessage.warning('请填写飞书 App ID')
+      return
+    }
+    if (!String(feishuCfg.appSecret ?? '').trim()) {
+      ElMessage.warning('请填写飞书 App Secret')
+      return
+    }
+    const rawUrl = String(feishuCfg.wikiUrl ?? '').trim()
+    if (!rawUrl) {
+      ElMessage.warning('请填写飞书多维表格链接')
+      return
+    }
+    let parsedUrl: URL
+    try {
+      parsedUrl = new URL(rawUrl)
+    } catch {
+      ElMessage.warning('飞书链接格式不正确，请直接复制浏览器地址栏中的完整链接')
+      return
+    }
+    if (!parsedUrl.hostname.includes('feishu.cn') && !parsedUrl.hostname.includes('larkoffice.com') && !parsedUrl.hostname.includes('larksuite.com')) {
+      ElMessage.warning('链接看起来不是飞书地址，请确认后重新粘贴')
+      return
+    }
+    if (!parsedUrl.pathname.includes('/wiki/')) {
+      ElMessage.warning('请复制飞书 Wiki 页面的链接（路径中需包含 /wiki/）')
+      return
+    }
+    if (!parsedUrl.searchParams.get('table')) {
+      ElMessage.warning('链接中缺少目标数据表参数（?table=xxx）。请在飞书中点击目标数据表后，再复制地址栏链接')
+      return
+    }
+  }
   if (!isStoreConfigured({ type: type as string, ...config } as any)) {
     ElMessage.warning('请先填写完整配置信息')
     return
@@ -1192,22 +1230,48 @@ async function confirmAndSave(options: PreviewConfirmOptions = {}) {
     if (options.extraData) {
       dataToSave = await augmentWechatArticlesWithApiData(dataToSave, (msg) => tipsDisplay(msg))
     }
+    const shouldDl = options.downloadImages !== false
+    if (Array.isArray(dataToSave)) {
+      dataToSave = dataToSave.map((item: any) => ({ ...item, downloadImages: shouldDl }))
+    } else if (dataToSave && typeof dataToSave === 'object') {
+      dataToSave = { ...dataToSave, downloadImages: shouldDl }
+    }
   } else {
     dataToSave = data
   }
 
-  const shouldDownloadImages = options.downloadImages !== false
-  const appendImageOption = (item: any) => ({
-    ...(item || {}),
-    downloadImages: shouldDownloadImages
-  })
-  if (Array.isArray(dataToSave)) {
-    dataToSave = dataToSave.map(appendImageOption)
-  } else if (dataToSave && typeof dataToSave === 'object') {
-    dataToSave = appendImageOption(dataToSave)
+  if (
+    collectionType === CollectionType.XHSNoteDetail ||
+    collectionType === CollectionType.XHSFeed ||
+    collectionType === CollectionType.XHSAccount
+  ) {
+    const shouldMedia =
+      collectionType === CollectionType.XHSFeed
+        ? options.downloadImagesAndVideo === true
+        : options.downloadImagesAndVideo !== false
+    const injectMeta = (item: any) => ({
+      ...item,
+      _metaData: { ...(item?._metaData || {}), downloadImagesAndVideo: shouldMedia }
+    })
+    if (Array.isArray(dataToSave)) {
+      dataToSave = dataToSave.map(injectMeta)
+    } else if (dataToSave && typeof dataToSave === 'object') {
+      dataToSave = injectMeta(dataToSave)
+    }
   }
 
+  const isXhsFeed = collectionType === CollectionType.XHSFeed
+  const xhsFeedMediaOn =
+    isXhsFeed && Array.isArray(dataToSave)
+      ? (dataToSave[0] as any)?._metaData?.downloadImagesAndVideo === true
+      : isXhsFeed && dataToSave && typeof dataToSave === 'object'
+        ? (dataToSave as any)?._metaData?.downloadImagesAndVideo === true
+        : false
+
   try {
+    if (isXhsFeed) {
+      tipsDisplay(xhsFeedMediaOn ? '正在保存（含封面上传）…' : '正在保存（跳过封面上传）…')
+    }
     const result = await storeCrawlData(collectionType, dataToSave, storeCfg)
     console.log('[CJDB] confirmAndSave Result:', result)
 
@@ -1318,6 +1382,23 @@ onMounted(async () => {
   flex-direction: column;
   align-items: flex-end;
   gap: 12px;
+
+  // 默认 30% 透明，不干扰用户阅读；hover 整体面板恢复 100%
+  // tip-display 不在此列，保持全显（它是操作反馈，必须清晰可见）
+  .collect-btn,
+  .store-trigger,
+  .mode-selector {
+    opacity: 0.3;
+    transition: opacity 0.25s ease;
+  }
+
+  &:hover {
+    .collect-btn,
+    .store-trigger,
+    .mode-selector {
+      opacity: 1;
+    }
+  }
 }
 
 .mode-selector {
@@ -1678,10 +1759,7 @@ onMounted(async () => {
               rgba(255, 255, 255, 0.2) 0px 0px 0px 1px,
               rgba(0, 0, 0, 0.45) 0px 6px 20px !important;
 
-  &:hover:not(.is-disabled):not(.collect-btn-busy) {
-    opacity: 0.7;
-    background: #101111 !important;
-  }
+  // 透明度由 .cjdb-panel 组级控制，不在此单独设 hover opacity
 
   :deep(.el-button__content) {
     display: flex;
@@ -1704,30 +1782,34 @@ onMounted(async () => {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
-    margin-top: -2px;
+    gap: 2px;
     min-width: 0;
     max-width: 100%;
     overflow: hidden;
   }
 
-  .collect-btn-main {
-    flex-shrink: 0;
-    font-size: 24px;
-    font-weight: 600;
-    line-height: 1.1;
-    letter-spacing: 2px;
-  }
-
+  // 类型文字：现在是主角（大字）
   .collect-btn-type {
+    flex-shrink: 0;
     min-width: 0;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 12px;
+    font-size: 15px;
     font-weight: 600;
-    opacity: 0.95;
+    line-height: 1.2;
+    letter-spacing: 0.2px;
+  }
+
+  // "采集" 标签：现在是配角（小字，弱化）
+  .collect-btn-main {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 1px;
+    opacity: 0.5;
   }
 }
 

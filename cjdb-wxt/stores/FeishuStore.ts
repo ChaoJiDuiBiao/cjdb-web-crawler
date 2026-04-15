@@ -1,4 +1,5 @@
 import type { StoreAdapter, StoreConfig, SaveResult, CollectionType, XiaohongshuNote, XiaohongshuAccount } from '@/types'
+import { showPanelTip } from '@/utils/tips'
 
 // FeishuStore 运行在 background context，直接使用原生 fetch（无 CORS 限制）
 const FEISHU_API_BASE = 'https://open.feishu.cn/open-apis'
@@ -30,7 +31,6 @@ async function getTenantAccessToken(appId: string, appSecret: string): Promise<s
 
 // ─── wiki URL 解析 ───
 // 支持格式：https://{host}/wiki/{wikiToken}?table={tableId}&view={viewId}
-// tableId 为可选（按 keyword 动态路由时无需指定）
 function parseWikiUrl(wikiUrl: string): { wikiToken: string; tableId: string } {
   let url: URL
   try {
@@ -70,29 +70,6 @@ async function getAppTokenFromWiki(accessToken: string, wikiToken: string): Prom
   return node.obj_token as string
 }
 
-// ─── 解析配置：从 wikiUrl 解析出 appToken（不含 tableId） ───
-const resolvedAppTokenCache = new Map<string, string>()
-
-async function resolveAppToken(store: StoreConfig): Promise<string> {
-  if (store.appToken) return store.appToken
-
-  if (!store.wikiUrl) {
-    throw new Error('飞书配置缺少多维表格链接（wikiUrl）')
-  }
-
-  const cacheKey = store.wikiUrl
-  if (resolvedAppTokenCache.has(cacheKey)) {
-    return resolvedAppTokenCache.get(cacheKey)!
-  }
-
-  const { wikiToken } = parseWikiUrl(store.wikiUrl)
-  const accessToken = await getTenantAccessToken(store.appId!, store.appSecret!)
-  const appToken = await getAppTokenFromWiki(accessToken, wikiToken)
-
-  resolvedAppTokenCache.set(cacheKey, appToken)
-  return appToken
-}
-
 // ─── 解析配置（兼容旧逻辑）：从 wikiUrl 解析出 appToken + 默认 tableId ───
 const resolvedCache = new Map<string, { appToken: string; tableId: string }>()
 
@@ -114,7 +91,7 @@ async function resolveConfig(store: StoreConfig): Promise<{ appToken: string; ta
 
   const { wikiToken, tableId } = parseWikiUrl(store.wikiUrl)
   if (!tableId) {
-    throw new Error(`飞书 Wiki 链接缺少 table 参数（账号类型需要指定目标数据表）: ${store.wikiUrl}`)
+    throw new Error(`飞书 Wiki 链接缺少目标数据表参数（请在飞书中切换到目标数据表后重新复制链接，链接中应包含 ?table=xxx）`)
   }
   const accessToken = await getTenantAccessToken(store.appId!, store.appSecret!)
   const appToken = await getAppTokenFromWiki(accessToken, wikiToken)
@@ -257,10 +234,16 @@ async function uploadImagesByUrlToFeishu(
   accessToken: string,
   appToken: string,
   urls: string[],
-  opts?: { concurrency?: number; retry?: number }
+  opts?: {
+    concurrency?: number
+    retry?: number
+    fromTabId?: number
+    progressLabel?: string
+  }
 ): Promise<string[]> {
   if (urls.length === 0) return []
   const retry = Math.max(0, opts?.retry ?? DEFAULT_IMAGE_UPLOAD_RETRY)
+  let completed = 0
 
   const results = await runWithConcurrency(
     urls,
@@ -275,11 +258,19 @@ async function uploadImagesByUrlToFeishu(
           }
           const filename = inferFilenameFromUrl(url, index, contentType)
           const token = await uploadImageToFeishu(accessToken, appToken, blob, filename)
+          completed++
+          if (opts?.progressLabel) {
+            showPanelTip(`飞书：正在上传${opts.progressLabel} ${completed}/${urls.length}...`, opts.fromTabId)
+          }
           return token
         } catch (e: any) {
           lastError = e
           if (attempt < retry) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)))
         }
+      }
+      completed++
+      if (opts?.progressLabel) {
+        showPanelTip(`飞书：正在上传${opts.progressLabel} ${completed}/${urls.length}...`, opts.fromTabId)
       }
       console.warn('[FeishuStore] 图片上传失败，跳过:', url, lastError?.message || lastError)
       return null
@@ -295,7 +286,8 @@ async function resolveAttachments(
   appToken: string,
   rawFields: Record<string, any>,
   schema: Record<string, number>,
-  downloadImages: boolean
+  downloadImages: boolean,
+  fromTabId?: number
 ): Promise<Record<string, string[]>> {
   const attachmentMap: Record<string, string[]> = {}
 
@@ -311,83 +303,13 @@ async function resolveAttachments(
       continue
     }
     console.log(`[FeishuStore] 上传附件字段 "${fieldName}"，共 ${urls.length} 张`)
-    attachmentMap[fieldName] = await uploadImagesByUrlToFeishu(accessToken, appToken, urls)
+    attachmentMap[fieldName] = await uploadImagesByUrlToFeishu(accessToken, appToken, urls, {
+      fromTabId,
+      progressLabel: `「${fieldName}」附件`
+    })
   }
 
   return attachmentMap
-}
-
-// ─── 多 Sheet（数据表）管理：以 searchKeyword 为 key ───
-
-// 列出 app 下所有数据表
-async function listTables(
-  accessToken: string,
-  appToken: string
-): Promise<Array<{ table_id: string; name: string }>> {
-  const resp = await fetch(
-    `${FEISHU_API_BASE}/bitable/v1/apps/${appToken}/tables`,
-    { headers: { Authorization: `Bearer ${accessToken}` } }
-  )
-  const data = await resp.json()
-  if (data.code !== 0) {
-    throw new Error(`获取飞书数据表列表失败(code=${data.code}): ${data.msg || JSON.stringify(data)}`)
-  }
-  return data.data?.items ?? []
-}
-
-// 创建新数据表（sheet）
-async function createTable(
-  accessToken: string,
-  appToken: string,
-  name: string
-): Promise<string> {
-  const resp = await fetch(
-    `${FEISHU_API_BASE}/bitable/v1/apps/${appToken}/tables`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ table: { name } })
-    }
-  )
-  const data = await resp.json()
-  if (data.code !== 0) {
-    throw new Error(`创建飞书数据表 "${name}" 失败(code=${data.code}): ${data.msg || JSON.stringify(data)}`)
-  }
-  return data.data?.table_id as string
-}
-
-// 表名 → tableId 缓存（appToken 级别隔离）
-const tableIdByName = new Map<string, string>()
-
-// 根据 keyword 查找或创建对应数据表，返回 tableId
-async function resolveTableIdByKeyword(
-  accessToken: string,
-  appToken: string,
-  keyword: string
-): Promise<string> {
-  const cacheKey = `${appToken}:${keyword}`
-  if (tableIdByName.has(cacheKey)) {
-    return tableIdByName.get(cacheKey)!
-  }
-
-  // 拉取所有已有数据表，查找同名表
-  const tables = await listTables(accessToken, appToken)
-  const existing = tables.find((t) => t.name === keyword)
-
-  let tableId: string
-  if (existing) {
-    console.log(`[FeishuStore] 复用已有数据表 "${keyword}" (${existing.table_id})`)
-    tableId = existing.table_id
-  } else {
-    console.log(`[FeishuStore] 数据表 "${keyword}" 不存在，自动创建`)
-    tableId = await createTable(accessToken, appToken, keyword)
-  }
-
-  tableIdByName.set(cacheKey, tableId)
-  return tableId
 }
 
 // ─── 飞书多维表格 API ───
@@ -440,7 +362,7 @@ const NOTE_FIELD_SCHEMA: Record<string, number> = {
   '图片': FIELD_TYPE.ATTACHMENT,
   '视频': FIELD_TYPE.ATTACHMENT,
   '标签': FIELD_TYPE.MULTI_SELECT,
-  '搜索关键词': FIELD_TYPE.TEXT,
+  '搜索关键词': FIELD_TYPE.SELECT,
   '搜索排名': FIELD_TYPE.NUMBER,
   '采集时间': FIELD_TYPE.TEXT,
   '评论列表': FIELD_TYPE.TEXT,
@@ -467,8 +389,24 @@ async function createTableField(
   appToken: string,
   tableId: string,
   fieldName: string,
-  fieldType: number
+  fieldType: number,
+  selectOptionNames?: string[]
 ): Promise<void> {
+  const body: Record<string, unknown> = { field_name: fieldName, type: fieldType }
+  if (fieldType === FIELD_TYPE.SELECT) {
+    const raw = (selectOptionNames ?? [])
+      .map((n) => String(n ?? '').trim().slice(0, 100))
+      .filter(Boolean)
+    const seen = new Set<string>()
+    const options: { name: string }[] = []
+    for (const name of raw) {
+      if (seen.has(name)) continue
+      seen.add(name)
+      options.push({ name })
+    }
+    body.property = { options }
+  }
+
   const resp = await fetch(
     `${FEISHU_API_BASE}/bitable/v1/apps/${appToken}/tables/${tableId}/fields`,
     {
@@ -477,7 +415,7 @@ async function createTableField(
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ field_name: fieldName, type: fieldType })
+      body: JSON.stringify(body)
     }
   )
   const data = await resp.json()
@@ -499,9 +437,13 @@ async function ensureFields(
   appToken: string,
   tableId: string,
   rawFields: Record<string, any>,
-  schema: Record<string, number>
+  schema: Record<string, number>,
+  fromTabId?: number,
+  /** 新建「单选」列时预置的选项文案（如搜索结果写入前的关键词列表） */
+  selectSeedByField?: Record<string, string[]>
 ): Promise<Array<{ field_id: string; field_name: string; type: number }>> {
   const cacheKey = `${appToken}:${tableId}`
+  showPanelTip('飞书：正在检查表格字段...', fromTabId)
   let tableFields = await getCachedTableFields(accessToken, appToken, tableId)
   const existingNames = new Set(tableFields.map((f) => f.field_name))
 
@@ -512,8 +454,11 @@ async function ensureFields(
 
   if (missing.length > 0) {
     console.log(`[FeishuStore] 自动创建缺失字段: ${missing.join(', ')}`)
-    for (const name of missing) {
-      await createTableField(accessToken, appToken, tableId, name, schema[name])
+    for (let i = 0; i < missing.length; i++) {
+      const name = missing[i]
+      showPanelTip(`飞书：正在创建字段「${name}」(${i + 1}/${missing.length})...`, fromTabId)
+      const seeds = schema[name] === FIELD_TYPE.SELECT ? selectSeedByField?.[name] : undefined
+      await createTableField(accessToken, appToken, tableId, name, schema[name], seeds)
     }
     // 刷新字段缓存
     fieldCache.delete(cacheKey)
@@ -693,83 +638,101 @@ async function getCachedTableFields(
   return fields
 }
 
+/** 飞书写入前：是否拉取远程二进制并上传附件列（仅本 Store 使用） */
+function feishuShouldDownloadAttachments(saveType: CollectionType, row: any): boolean {
+  if (
+    saveType === 'xhs-note-detail' ||
+    saveType === 'xhs-feed' ||
+    saveType === 'xhs-account'
+  ) {
+    const m = row?._metaData
+    if (m && typeof m === 'object') {
+      if (typeof m.downloadImagesAndVideo === 'boolean') return m.downloadImagesAndVideo
+      if (typeof m.downloadImages === 'boolean') return m.downloadImages
+    }
+    if (saveType === 'xhs-feed') return false
+    return true
+  }
+  return row?.downloadImages !== false
+}
+
 // ─── 存储适配器入口 ───
 export const feishuStore: StoreAdapter = {
-  async save(type: CollectionType, data: any, store: StoreConfig): Promise<SaveResult | SaveResult[]> {
+  async save(
+    type: CollectionType,
+    data: any,
+    store: StoreConfig,
+    fromTabId?: number
+  ): Promise<SaveResult | SaveResult[]> {
     if (!store.appId || !store.appSecret) {
       return { ok: false, error: '飞书配置缺少 App ID 或 App Secret' }
     }
 
+    showPanelTip('飞书：正在鉴权并连接开放平台...', fromTabId)
     const accessToken = await getTenantAccessToken(store.appId, store.appSecret)
     const schema = type === 'xhs-account' ? ACCOUNT_FIELD_SCHEMA : NOTE_FIELD_SCHEMA
 
     // 支持批量（数组）和单条数据
     const items: any[] = Array.isArray(data) ? data : [data]
 
-    // ── 仅搜索结果页（xhs-feed）按 searchKeyword 分组写入不同 sheet ──
-    if (type === 'xhs-feed') {
-      // 以 wikiUrl 解析 appToken（不依赖 wikiUrl 中的 tableId 参数）
-      const appToken = await resolveAppToken(store)
-
-      // 按 searchKeyword 分组（无关键词的归入 fallback 组）
-      const groups = new Map<string, XiaohongshuNote[]>()
-      for (const item of items as XiaohongshuNote[]) {
-        const keyword = item.searchKeyword?.trim() || '未分类'
-        if (!groups.has(keyword)) groups.set(keyword, [])
-        groups.get(keyword)!.push(item)
-      }
-
-      const allResults: SaveResult[] = []
-
-      for (const [keyword, groupItems] of groups) {
-        // 查找或创建以关键词命名的数据表
-        const tableId = await resolveTableIdByKeyword(accessToken, appToken, keyword)
-
-        const firstRawFields = noteToRawFields(groupItems[0])
-        const tableFields = await ensureFields(accessToken, appToken, tableId, firstRawFields, schema)
-
-        const records: Array<Record<string, any>> = []
-        for (const item of groupItems) {
-          const rawFields = noteToRawFields(item)
-          const downloadImages = item.downloadImages !== false
-          const attachmentMap = await resolveAttachments(accessToken, appToken, rawFields, schema, downloadImages)
-          const record = buildFeishuRecord(rawFields, tableFields, attachmentMap)
-          if (Object.keys(record).length > 0) records.push(record)
-        }
-
-        if (records.length === 0) {
-          allResults.push({ ok: false, error: `关键词 "${keyword}" 没有可写入的字段` })
-          continue
-        }
-
-        const BATCH_SIZE = 500
-        for (let i = 0; i < records.length; i += BATCH_SIZE) {
-          const batch = records.slice(i, i + BATCH_SIZE)
-          await batchCreateRecords(accessToken, appToken, tableId, batch)
-          for (const _ of batch) {
-            allResults.push({ ok: true, action: 'create' })
-          }
-        }
-      }
-
-      return allResults.length === 1 ? allResults[0] : allResults
-    }
-
-    // ── 其余类型（xhs-note-detail、xhs-account 等）：写入配置指定的 table ──
+    showPanelTip('飞书：正在解析多维表格与目标数据表...', fromTabId)
     const { appToken, tableId } = await resolveConfig(store)
 
     const toRawFields = type === 'xhs-account'
       ? (item: any) => accountToRawFields(item as XiaohongshuAccount)
       : (item: any) => noteToRawFields(item as XiaohongshuNote)
 
-    const firstRawFields = toRawFields(items[0])
-    const tableFields = await ensureFields(accessToken, appToken, tableId, firstRawFields, schema)
+    const mergeRawFieldsForEnsure = (itemsArr: any[]): Record<string, any> => {
+      const merged: Record<string, any> = {}
+      for (const it of itemsArr) {
+        const rf = toRawFields(it)
+        for (const [k, v] of Object.entries(rf)) {
+          if (merged[k] === undefined && v !== '' && v != null) merged[k] = v
+        }
+      }
+      return Object.keys(merged).length ? merged : toRawFields(itemsArr[0])
+    }
+
+    const firstRawFields =
+      type === 'xhs-feed' ? mergeRawFieldsForEnsure(items) : toRawFields(items[0])
+
+    const selectSeedByField =
+      type === 'xhs-feed'
+        ? {
+            搜索关键词: [
+              ...new Set(
+                (items as XiaohongshuNote[])
+                  .map((n) => n.searchKeyword?.trim())
+                  .filter((k): k is string => !!k)
+              )
+            ]
+          }
+        : undefined
+
+    const tableFields = await ensureFields(
+      accessToken,
+      appToken,
+      tableId,
+      firstRawFields,
+      schema,
+      fromTabId,
+      selectSeedByField
+    )
 
     const records: Array<Record<string, any>> = []
-    for (const item of items) {
+    for (let r = 0; r < items.length; r++) {
+      const item = items[r]
+      showPanelTip(`飞书：处理附件与字段（${r + 1}/${items.length}）...`, fromTabId)
       const rawFields = toRawFields(item)
-      const downloadImages = item.downloadImages !== false
-      const attachmentMap = await resolveAttachments(accessToken, appToken, rawFields, schema, downloadImages)
+      const doDownload = feishuShouldDownloadAttachments(type, item)
+      const attachmentMap = await resolveAttachments(
+        accessToken,
+        appToken,
+        rawFields,
+        schema,
+        doDownload,
+        fromTabId
+      )
       const record = buildFeishuRecord(rawFields, tableFields, attachmentMap)
       if (Object.keys(record).length > 0) records.push(record)
     }
@@ -782,6 +745,8 @@ export const feishuStore: StoreAdapter = {
     const results: SaveResult[] = []
     for (let i = 0; i < records.length; i += BATCH_SIZE) {
       const batch = records.slice(i, i + BATCH_SIZE)
+      const end = Math.min(i + batch.length, records.length)
+      showPanelTip(`飞书：正在写入数据 ${end}/${records.length}...`, fromTabId)
       await batchCreateRecords(accessToken, appToken, tableId, batch)
       for (const _ of batch) {
         results.push({ ok: true, action: 'create' })

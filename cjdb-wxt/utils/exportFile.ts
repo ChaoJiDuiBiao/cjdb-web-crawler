@@ -6,11 +6,12 @@
  *   exportXHSAccount     - 小红书账号（CSV / Obsidian MD）
  *   exportWechatArticle  - 公众号文章（CSV / Obsidian MD）
  *   exportFeishuDoc      - 飞书文档（CSV / Obsidian MD）
- *   exportXHSNoteDetail  - 小红书笔记详情（async，ZIP 含图片）
+ *   exportXHSNoteDetail  - 小红书笔记详情（async，ZIP；是否打包媒体由 LocalFileStore 约定）
  */
 
 import type { XiaohongshuNote } from '@/types'
 import { MessageTypes } from '@/types'
+import { localFileStoreShouldEmbedXHSNoteZipMedia } from '@/stores/LocalFileStore'
 import { browser } from 'wxt/browser'
 
 // ─── 中文 label 映射（key → 显示名）────────────────────────────────────────
@@ -71,7 +72,8 @@ const LABEL_MAP: Record<string, string> = {
 
 // 完全跳过的字段（内部控制用，或数据太复杂不适合导出）
 const SKIP_KEYS = new Set([
-  'downloadImages',   // 内部控制
+  '_metaData',        // Store 元信息，非业务列
+  'downloadImages',   // 兼容旧 payload 顶层字段
   'authorAvatarUrl',  // 头像 URL
   'avatarUrl',        // 头像 URL
   'source',           // 采集来源（dom/api）内部字段
@@ -231,8 +233,8 @@ function toBinMarkdown(rows: any[]): string {
 
 // ─── NoteDetail Markdown（2.2 格式，含图片引用和评论）─────────────────────
 
-function toNoteDetailMarkdown(note: XiaohongshuNote): string {
-  // 推导图片文件名（与 exportXHSNoteDetail 下载时的命名规则一致）
+/** @param embedLocalMedia 为 true 时用 ZIP 内相对文件名；为 false 时用远程 URL / 链接（与 _metaData.downloadImagesAndVideo 一致） */
+function toNoteDetailMarkdown(note: XiaohongshuNote, embedLocalMedia = true): string {
   const imageUrls: string[] = []
   if (note.coverUrl) imageUrls.push(note.coverUrl)
   if (note.imageUrls) {
@@ -246,12 +248,9 @@ function toNoteDetailMarkdown(note: XiaohongshuNote): string {
     return i === 0 ? `cover.${ext}` : `image_${i}.${ext}`
   })
 
-  // 推导视频文件名
   const videoFilename = note.videoUrl
     ? `video.${note.videoUrl.match(/\.(mp4|mov|m4v|webm)/i)?.[1] || 'mp4'}`
     : null
-
-  const imageRefs = imageFilenames.map((f, i) => `![图${i + 1}](${f})`).join('\n')
 
   const frontmatter = [
     '---',
@@ -263,22 +262,30 @@ function toNoteDetailMarkdown(note: XiaohongshuNote): string {
 
   const bodyParts: string[] = []
 
-  if (imageRefs) {
-    // 每行最多 5 列的 Markdown table
-    const cols = Math.min(imageFilenames.length, 5)
-    const headerRow = '| ' + Array(cols).fill('').join(' | ') + ' |'
-    const separatorRow = '| ' + Array(cols).fill('---').join(' | ') + ' |'
-    const cellRows: string[] = []
-    for (let i = 0; i < imageFilenames.length; i += cols) {
-      const chunk = imageFilenames.slice(i, i + cols)
-      while (chunk.length < cols) chunk.push('')
-      cellRows.push('| ' + chunk.map((f, j) => f ? `![图${i + j + 1}](${f})` : '').join(' | ') + ' |')
+  if (imageUrls.length > 0) {
+    if (embedLocalMedia) {
+      const cols = Math.min(imageFilenames.length, 5)
+      const headerRow = '| ' + Array(cols).fill('').join(' | ') + ' |'
+      const separatorRow = '| ' + Array(cols).fill('---').join(' | ') + ' |'
+      const cellRows: string[] = []
+      for (let i = 0; i < imageFilenames.length; i += cols) {
+        const chunk = imageFilenames.slice(i, i + cols)
+        while (chunk.length < cols) chunk.push('')
+        cellRows.push('| ' + chunk.map((f, j) => f ? `![图${i + j + 1}](${f})` : '').join(' | ') + ' |')
+      }
+      bodyParts.push('## 配图', '', headerRow, separatorRow, ...cellRows, '')
+    } else {
+      const lines = imageUrls.map((url, i) => `![图${i + 1}](${url})`)
+      bodyParts.push('## 配图', '', ...lines, '')
     }
-    bodyParts.push('## 配图', '', headerRow, separatorRow, ...cellRows, '')
   }
 
-  if (videoFilename) {
-    bodyParts.push('## 视频', '', `![视频](${videoFilename})`, '')
+  if (note.videoUrl) {
+    if (embedLocalMedia && videoFilename) {
+      bodyParts.push('## 视频', '', `![视频](${videoFilename})`, '')
+    } else {
+      bodyParts.push('## 视频', '', `[在线视频](${note.videoUrl})`, '')
+    }
   }
 
   bodyParts.push('## 正文', '', note.content || '')
@@ -382,6 +389,8 @@ export function exportFeishuDoc(data: any, format: string): void {
 export async function exportXHSNoteDetail(note: XiaohongshuNote, format: string): Promise<void> {
   if (!note) return
 
+  const embedBinaries = localFileStoreShouldEmbedXHSNoteZipMedia(note)
+
   const datePrefix = (note.publishTimeStr || '').replace(/\s.+/, '').replace(/[^\d-]/g, '-') || new Date().toISOString().slice(0, 10)
   const titleSafe = (note.title || '笔记').replace(/[\\/:*?"<>|\n\r]/g, '_').slice(0, 40)
 
@@ -395,9 +404,9 @@ export async function exportXHSNoteDetail(note: XiaohongshuNote, format: string)
     }
   }
 
-  // 下载图片，失败则跳过
+  // 下载图片，失败则跳过（由 _metaData.downloadImagesAndVideo 控制）
   const imageFiles: { filename: string; data: Uint8Array }[] = []
-  for (let i = 0; i < imageUrls.length; i++) {
+  if (embedBinaries) for (let i = 0; i < imageUrls.length; i++) {
     const ext = imageUrls[i].match(/\.(jpe?g|png|webp|gif)/i)?.[1] || 'jpg'
     const filename = i === 0 ? `cover.${ext}` : `image_${i}.${ext}`
     try {
@@ -426,7 +435,7 @@ export async function exportXHSNoteDetail(note: XiaohongshuNote, format: string)
 
   // 下载视频，失败则跳过（直接 fetch，不走 background 代理，避免大文件走 sendMessage 超限）
   let videoFile: { filename: string; data: Uint8Array } | null = null
-  if (note.videoUrl) {
+  if (embedBinaries && note.videoUrl) {
     const ext = note.videoUrl.match(/\.(mp4|mov|m4v|webm)/i)?.[1] || 'mp4'
     const filename = `video.${ext}`
     try {
@@ -458,7 +467,7 @@ export async function exportXHSNoteDetail(note: XiaohongshuNote, format: string)
     zip.file(`${titleSafe}.csv`, toCsv(note))
   } else {
     const mdFilename = `${datePrefix}-${titleSafe}.md`
-    zip.file(mdFilename, toNoteDetailMarkdown(note))
+    zip.file(mdFilename, toNoteDetailMarkdown(note, embedBinaries))
   }
 
   for (const { filename, data } of imageFiles) {

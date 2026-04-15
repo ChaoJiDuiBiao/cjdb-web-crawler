@@ -103,7 +103,7 @@ export const STORE_SCHEMA: Record<
     fields: [
       { key: 'appId', label: 'App ID', inputType: 'text' },
       { key: 'appSecret', label: 'App Secret', inputType: 'password' },
-      { key: 'wikiUrl', label: '多维表格链接（飞书 Wiki 页面 URL）', inputType: 'text' }
+      { key: 'wikiUrl', label: '多维表格链接（切换到目标数据表后复制链接，需含 ?table= 参数）', inputType: 'text' }
     ],
     getDisplayLabel: (s) => {
       const name = (s.config as any)?.name?.trim()

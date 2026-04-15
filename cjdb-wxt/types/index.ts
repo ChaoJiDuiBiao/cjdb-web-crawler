@@ -1,9 +1,37 @@
+import { CollectionType } from './collection'
+
+export { CollectionType }
+
+// ─── 小红书 _metaData（与 XiaohongshuNote / XiaohongshuAccount 紧邻，仅类型无逻辑）────
+
+/** 笔记详情页 → 保存时的元信息 */
+export interface XiaohongshuNoteDetailPayloadMeta {
+  /** 是否下载并上传笔记内图片、原视频（关闭则仅用外链等，本地 ZIP 也不打包二进制） */
+  downloadImagesAndVideo?: boolean
+}
+
+/** 搜索结果每条卡片 → 保存时的元信息 */
+export interface XiaohongshuSearchFeedItemPayloadMeta {
+  /** 是否下载并上传封面图 */
+  downloadImagesAndVideo?: boolean
+}
+
+/** 账号主页 → 保存时的元信息 */
+export interface XiaohongshuAccountPayloadMeta {
+  /** 是否下载并上传头像等附件 */
+  downloadImagesAndVideo?: boolean
+}
+
 // 小红书笔记数据结构
 export interface XiaohongshuNote {
   url?: string
   noteId?: string
   rank?: number
-  downloadImages?: boolean
+  /**
+   * 详情页为 XiaohongshuNoteDetailPayloadMeta；搜索结果每条为 XiaohongshuSearchFeedItemPayloadMeta。
+   * 二者当前字段一致，便于共用 XiaohongshuNote 类型。
+   */
+  _metaData?: XiaohongshuNoteDetailPayloadMeta | XiaohongshuSearchFeedItemPayloadMeta
   searchKeyword?: string  // 搜索关键词（搜索结果采集时）
   title?: string
   content?: string
@@ -58,7 +86,7 @@ export interface CommentExport {
 export interface XiaohongshuAccount {
   userId: string
   nickname: string
-  downloadImages?: boolean
+  _metaData?: XiaohongshuAccountPayloadMeta
   avatarUrl?: string
   description?: string
   location?: string  // 归属地
@@ -87,6 +115,7 @@ export interface WechatPrincipalInfo {
 export interface WechatArticle {
   url?: string
   title?: string
+  /** 是否下载图片到 Notion/飞书（公众号预览勾选）；非 _metaData */
   downloadImages?: boolean
   content?: string        // 纯文本内容
   contentHtml?: string    // HTML 内容（从文章详情 API 获取）
@@ -131,15 +160,6 @@ export interface FeishuDoc {
   contentMarkdown?: string
   source?: 'dom' | 'runtime'
   crawledAt?: string
-}
-
-// 采集数据类型
-export enum CollectionType {
-  XHSNoteDetail = 'xhs-note-detail',  // 小红书笔记详情页
-  XHSFeed = 'xhs-feed',               // 小红书搜索结果（沿用 feed 类型标识）
-  XHSAccount = 'xhs-account',         // 小红书账号
-  WechatArticle = 'wechat-article',   // 公众号文章（内容/数据完整性取决于采集方式）
-  FeishuDoc = 'feishu-doc'            // 飞书文档
 }
 
 // 存储源类型

@@ -379,7 +379,7 @@ export class XiaohongshuNoteCrawler {
 
     showTip('数据采集完成')
 
-    return {
+    const data: XiaohongshuNote = {
       url,
       noteId,
       title,
@@ -397,13 +397,21 @@ export class XiaohongshuNoteCrawler {
       authorFollowing,
       coverUrl,
       imageUrls,
-      videoUrl,
+      videoUrl: videoUrl ?? undefined,
       mediaType,
       tags: Array.from(tags),
       commentList,
       source: 'dom',
       crawledAt: new Date().toISOString()
     }
+
+    // 有有效视频直链时：DOM 封面/轮播图不可靠，返回前清洗掉
+    if (data.videoUrl) {
+      data.coverUrl = null
+      data.imageUrls = null
+    }
+
+    return data
   }
 
   private getCurrentNoteUrl(): string {

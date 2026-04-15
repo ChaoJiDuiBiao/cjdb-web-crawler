@@ -638,13 +638,32 @@ class NotionAPI {
   }
 }
 
+/** Notion 写入 files 属性前：是否下载远程文件并上传（仅本 Store 使用） */
+function notionShouldDownloadUploadedFiles(collectionType: CollectionType | undefined, raw: any): boolean {
+  if (
+    collectionType === CollectionType.XHSNoteDetail ||
+    collectionType === CollectionType.XHSFeed ||
+    collectionType === CollectionType.XHSAccount
+  ) {
+    const m = raw?._metaData
+    if (m && typeof m === 'object') {
+      if (typeof m.downloadImagesAndVideo === 'boolean') return m.downloadImagesAndVideo
+      if (typeof m.downloadImages === 'boolean') return m.downloadImages
+    }
+    if (collectionType === CollectionType.XHSFeed) return false
+    return true
+  }
+  return raw?.downloadImages !== false
+}
+
 async function toNotionProperties(
   raw: any,
   schema: any,
   fieldNameMap: Record<string, string>,
   api: NotionAPI,
   isUpdate = false,
-  fromTabId?: number
+  fromTabId?: number,
+  collectionType?: CollectionType
 ) {
   const nowStart = new Date().toISOString()
 
@@ -791,7 +810,7 @@ async function toNotionProperties(
         propValue = null
       } else {
         const isVideoField = keys.includes('videoUrl')
-        const shouldDownload = raw?.downloadImages !== false
+        const shouldDownload = notionShouldDownloadUploadedFiles(collectionType, raw)
         if (!shouldDownload) {
           propValue = {
             files: urls.map((url, index) => ({
@@ -917,7 +936,15 @@ async function saveXhsNoteToNotion(
 
       showPanelTip('正在查询是否已存在该笔记...', fromTabId)
       const existing = await api.findByUniqueField(schema, 'URL', url)
-      const props = await toNotionProperties(data, schema, api.fieldNameMap, api, !!existing, fromTabId)
+      const props = await toNotionProperties(
+        data,
+        schema,
+        api.fieldNameMap,
+        api,
+        !!existing,
+        fromTabId,
+        CollectionType.XHSNoteDetail
+      )
 
       // 转换 commentList 为 blocks
       const children = data.commentList ? convertCommentListToBlocks(data.commentList) : null
@@ -967,17 +994,19 @@ async function saveXhsFeedToNotion(
   const batchCrawledAt = new Date().toISOString()
   const total = items.length
 
-  showPanelTip(`正在保存搜索「${keyword}」...`, fromTabId)
+  showPanelTip(`Notion：正在保存搜索「${keyword}」（${total} 条）…`, fromTabId)
   console.log(`[Notion] 保存搜索任务: keyword=${keyword}, total=${total}, batchCrawledAt=${batchCrawledAt}`)
 
   try {
+    showPanelTip(`Notion：正在组装并写入页面内容…`, fromTabId)
     const props = await toNotionProperties(
       { '标题': keyword, '数量': total, crawledAt: batchCrawledAt },
       schema,
       api.fieldNameMap,
       api,
       false,
-      fromTabId
+      fromTabId,
+      CollectionType.XHSFeed
     )
     const children = convertXhsSearchResultsToBlocks(items, keyword)
     const result = await api.createPage(props, children)
@@ -1054,7 +1083,15 @@ async function saveWechatArticlesToNotion(
     await Promise.all(
       batch.map(async ({ item, idx, pageId }) => {
         try {
-          const props = await toNotionProperties(item, schema, api.fieldNameMap, api, true, fromTabId)
+          const props = await toNotionProperties(
+            item,
+            schema,
+            api.fieldNameMap,
+            api,
+            true,
+            fromTabId,
+            CollectionType.WechatArticle
+          )
           await api.updatePage(pageId, props)
           const markdown = convertRichTextToMarkdown(item)
           if (markdown) {
@@ -1082,7 +1119,15 @@ async function saveWechatArticlesToNotion(
     await Promise.all(
       batch.map(async ({ item, idx }) => {
         try {
-          const props = await toNotionProperties(item, schema, api.fieldNameMap, api, false, fromTabId)
+          const props = await toNotionProperties(
+            item,
+            schema,
+            api.fieldNameMap,
+            api,
+            false,
+            fromTabId,
+            CollectionType.WechatArticle
+          )
           const markdown = convertRichTextToMarkdown(item)
           const result = await api.createPage(props, null, markdown || undefined)
           results[idx] = { ok: true, action: 'create', pageId: result?.id }
@@ -1125,7 +1170,15 @@ async function saveFeishuDocsToNotion(
     try {
       showPanelTip(`正在处理第 ${i + 1}/${items.length} 篇飞书文档...`, fromTabId)
       const existing = await api.findByUniqueField(schema, 'URL', url)
-      const props = await toNotionProperties(item, schema, api.fieldNameMap, api, !!existing, fromTabId)
+      const props = await toNotionProperties(
+        item,
+        schema,
+        api.fieldNameMap,
+        api,
+        !!existing,
+        fromTabId,
+        CollectionType.FeishuDoc
+      )
       const markdown = convertRichTextToMarkdown(item)
 
       if (existing) {
@@ -1176,7 +1229,15 @@ async function saveXhsAccountToNotion(
 
       showPanelTip('正在查询是否已存在该账号...', fromTabId)
       const existing = await api.findByUniqueField(schema, '账号ID', userId)
-      const props = await toNotionProperties(data, schema, api.fieldNameMap, api, !!existing, fromTabId)
+      const props = await toNotionProperties(
+        data,
+        schema,
+        api.fieldNameMap,
+        api,
+        !!existing,
+        fromTabId,
+        CollectionType.XHSAccount
+      )
 
       // 转换 noteListText 为 blocks
       const children = data.noteListText ? convertNoteListToBlocks(data.noteListText) : null
