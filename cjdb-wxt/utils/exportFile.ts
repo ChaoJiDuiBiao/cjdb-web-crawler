@@ -1,7 +1,17 @@
 /**
  * exportFile - 本地文件导出工具（仅在 content script / page 上下文使用）
- * 支持 CSV 和 Obsidian Markdown（YAML Frontmatter 格式）
+ *
+ * 每个 CollectionType 对应一个导出函数：
+ *   exportXHSFeed        - 小红书搜索结果（CSV / Bin MD）
+ *   exportXHSAccount     - 小红书账号（CSV / Obsidian MD）
+ *   exportWechatArticle  - 公众号文章（CSV / Obsidian MD）
+ *   exportFeishuDoc      - 飞书文档（CSV / Obsidian MD）
+ *   exportXHSNoteDetail  - 小红书笔记详情（async，ZIP 含图片）
  */
+
+import type { XiaohongshuNote } from '@/types'
+import { MessageTypes } from '@/types'
+import { browser } from 'wxt/browser'
 
 // ─── 中文 label 映射（key → 显示名）────────────────────────────────────────
 
@@ -11,6 +21,7 @@ const LABEL_MAP: Record<string, string> = {
   rank: '排名',
   searchKeyword: '搜索关键词',
   title: '标题',
+  coverUrl: '封面链接',
   content: '正文',
   publishTime: '发布时间戳',
   publishTimeStr: '发布时间',
@@ -61,22 +72,21 @@ const LABEL_MAP: Record<string, string> = {
 // 完全跳过的字段（内部控制用，或数据太复杂不适合导出）
 const SKIP_KEYS = new Set([
   'downloadImages',   // 内部控制
-  'coverUrl',         // 封面图 URL 太长且无实际用途
   'authorAvatarUrl',  // 头像 URL
   'avatarUrl',        // 头像 URL
   'source',           // 采集来源（dom/api）内部字段
   'provider',         // 内部字段
-  'commentList',      // 嵌套对象数组，单独处理
+  'commentList',      // 嵌套对象数组，NoteDetail 单独处理
   'contentHtml',      // HTML 原文，太长
   'principalInfo',    // 嵌套对象
   'fetchData',        // 内部控制
   'collected',        // 内部状态
 ])
 
-// 正文字段：放到 YAML 之外作为 Markdown body
+// 正文字段：放到 YAML body 而非 frontmatter
 const BODY_KEYS = new Set(['content', 'noteListText', 'contentMarkdown', 'excerpt'])
 
-// ─── 工具函数 ──────────────────────────────────────────────────────────────
+// ─── 通用工具函数 ──────────────────────────────────────────────────────────
 
 function stringify(val: any): string {
   if (val == null) return ''
@@ -103,6 +113,39 @@ function collectKeys(rows: any[]): string[] {
   return keys
 }
 
+function safeFilename(data: any, ext: string): string {
+  // 搜索结果：用关键词作为文件名
+  const rows = toRows(data)
+  const keyword = rows[0]?.searchKeyword?.trim()
+  if (keyword) {
+    const safe = keyword.replace(/[\\/:*?"<>|\n\r]/g, '_').slice(0, 50)
+    return `${safe}.${ext}`
+  }
+
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  const count = Array.isArray(data) ? data.length : 1
+  const suffix = count > 1 ? `共${count}条` : ''
+  return suffix ? `${ts}_${suffix}.${ext}` : `${ts}.${ext}`
+}
+
+function triggerDownload(filename: string, content: string | Uint8Array, mime: string): void {
+  const blob = content instanceof Uint8Array
+    ? new Blob([content.buffer as ArrayBuffer], { type: mime })
+    : new Blob([content], { type: `${mime};charset=utf-8` })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  setTimeout(() => {
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }, 200)
+}
+
 // ─── CSV ──────────────────────────────────────────────────────────────────
 
 function csvCell(val: any): string {
@@ -116,40 +159,34 @@ function toCsv(data: any): string {
   const keys = collectKeys(rows)
   const header = keys.map((k) => csvCell(LABEL_MAP[k] ?? k)).join(',')
   const dataRows = rows.map((row) => keys.map((k) => csvCell(row?.[k])).join(','))
-  return '\uFEFF' + [header, ...dataRows].join('\n') // BOM 保证 Excel 正确识别 UTF-8
+  return '\uFEFF' + [header, ...dataRows].join('\n')
 }
 
-// ─── Obsidian Markdown ────────────────────────────────────────────────────
+// ─── Obsidian Markdown（单条，用于账号 / 公众号 / 飞书文档）────────────────
 
 function escapeYaml(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')
 }
 
-/** 单条数据 → 一个完整的 Obsidian Markdown 文件字符串 */
-function itemToMarkdown(row: any): string {
+function toObsidianMarkdown(row: any): string {
   const yamlLines = ['---']
   let bodyContent = ''
 
   for (const k of Object.keys(row)) {
     if (SKIP_KEYS.has(k)) continue
-
     const val = row[k]
     if (val == null || val === '') continue
-
     const label = LABEL_MAP[k] ?? k
 
-    // 正文字段：不放 YAML，留到 body
     if (BODY_KEYS.has(k)) {
-      if (!bodyContent) bodyContent = String(val) // 取第一个非空的正文字段
+      if (!bodyContent) bodyContent = String(val)
       continue
     }
 
     if (Array.isArray(val)) {
-      // 数组 → Obsidian 多值 list
       yamlLines.push(`${label}:`)
       val.forEach((v) => yamlLines.push(`  - "${escapeYaml(String(v))}"`))
     } else if (typeof val === 'object') {
-      // 嵌套对象（未被 SKIP_KEYS 过滤的）→ 序列化为字符串
       yamlLines.push(`${label}: "${escapeYaml(JSON.stringify(val))}"`)
     } else {
       yamlLines.push(`${label}: "${escapeYaml(String(val))}"`)
@@ -157,63 +194,228 @@ function itemToMarkdown(row: any): string {
   }
 
   yamlLines.push('---')
-
   const title = row.title || row.nickname || row.account || row.docTitle || '采集记录'
   const parts: string[] = [yamlLines.join('\n'), '', `# ${title}`]
-  if (bodyContent) {
-    parts.push('', bodyContent)
-  }
-
+  if (bodyContent) parts.push('', bodyContent)
   return parts.join('\n')
 }
 
-// ─── 触发下载 ─────────────────────────────────────────────────────────────
+// ─── Bin Markdown（批量列表，用于搜索结果）───────────────────────────────────
 
-function safeFilename(data: any, ext: string): string {
-  const now = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-  const count = Array.isArray(data) ? data.length : 1
-  const suffix = count > 1 ? `共${count}条` : ''
-  return suffix ? `${ts}_${suffix}.${ext}` : `${ts}.${ext}`
+const FEED_ORDERED_KEYS = ['title', 'coverUrl', 'likes', 'authorNickname', 'publishTimeStr', 'url', 'searchKeyword', 'noteId']
+
+function toBinMarkdown(rows: any[]): string {
+  return rows.map((row, idx) => {
+    if (!row || typeof row !== 'object') return `序号：${idx + 1}`
+    const lines: string[] = [`序号：${idx + 1}`]
+    const seen = new Set<string>()
+
+    for (const k of FEED_ORDERED_KEYS) {
+      if (SKIP_KEYS.has(k)) continue
+      seen.add(k)
+      const val = row[k]
+      if (val == null || val === '' || val === 0) continue
+      lines.push(`${LABEL_MAP[k] ?? k}：${stringify(val)}`)
+    }
+
+    for (const k of Object.keys(row)) {
+      if (seen.has(k) || SKIP_KEYS.has(k) || BODY_KEYS.has(k)) continue
+      const val = row[k]
+      if (val == null || val === '') continue
+      lines.push(`${LABEL_MAP[k] ?? k}：${stringify(val)}`)
+    }
+
+    return lines.join('\n')
+  }).join('\n\n---\n\n')
 }
 
-function triggerDownload(filename: string, content: string, mime: string): void {
-  const blob = new Blob([content], { type: `${mime};charset=utf-8` })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  setTimeout(() => {
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-  }, 200)
+// ─── NoteDetail Markdown（2.2 格式，含图片引用和评论）─────────────────────
+
+function toNoteDetailMarkdown(note: XiaohongshuNote, imageFilenames: string[]): string {
+  const imageRefs = imageFilenames.map((f, i) => `![图${i + 1}](${f})`).join('\n')
+
+  const frontmatter = [
+    '---',
+    `标题：${note.title || ''}`,
+    `点赞：${note.likes ?? ''}`,
+    `标签：${Array.isArray(note.tags) ? note.tags.join(' ') : ''}`,
+    '---',
+  ].join('\n')
+
+  const bodyParts: string[] = []
+
+  if (imageRefs) {
+    // 每行最多 5 列的 Markdown table
+    const cols = Math.min(imageFilenames.length, 5)
+    const headerRow = '| ' + Array(cols).fill('').join(' | ') + ' |'
+    const separatorRow = '| ' + Array(cols).fill('---').join(' | ') + ' |'
+    const cellRows: string[] = []
+    for (let i = 0; i < imageFilenames.length; i += cols) {
+      const chunk = imageFilenames.slice(i, i + cols)
+      while (chunk.length < cols) chunk.push('')
+      cellRows.push('| ' + chunk.map((f, j) => f ? `![图${i + j + 1}](${f})` : '').join(' | ') + ' |')
+    }
+    bodyParts.push('## 配图', '', headerRow, separatorRow, ...cellRows, '')
+  }
+
+  bodyParts.push('## 正文', '', note.content || '')
+
+  const commentLines: string[] = []
+  if (note.commentList && note.commentList.length > 0) {
+    commentLines.push('')
+    for (const c of note.commentList) {
+      commentLines.push(`评论${c.no}：${c.comment}`)
+      if (c.replies && c.replies.length > 0) {
+        for (const r of c.replies) {
+          commentLines.push(`    回复${r.no}：${r.comment}`)
+        }
+      }
+      commentLines.push('')
+    }
+  }
+
+  return [frontmatter, '', ...bodyParts, ...commentLines].join('\n')
 }
 
 // ─── 公开 API ─────────────────────────────────────────────────────────────
 
-/**
- * 按 format 导出并触发浏览器下载
- * @param type    CollectionType 字符串（暂未使用，保留供后续扩展）
- * @param data    单条对象 或 对象数组
- * @param format  'csv' | 'markdown'
- */
-export function exportFile(type: string, data: any, format: string): void {
+/** 小红书搜索结果 */
+export function exportXHSFeed(data: any, format: string): void {
   if (!data) return
-
   if (format === 'csv') {
     triggerDownload(safeFilename(data, 'csv'), toCsv(data), 'text/csv')
   } else if (format === 'markdown') {
     const rows = toRows(data)
-    if (rows.length === 1) {
-      // 单条：直接生成一个文件
-      triggerDownload(safeFilename(data, 'md'), itemToMarkdown(rows[0]), 'text/markdown')
-    } else {
-      // 多条：每条之间用空行 + 水平线分隔（不用 ---，避免被解析为 YAML 分隔符）
-      const content = rows.map(itemToMarkdown).join('\n\n---\n\n')
-      triggerDownload(safeFilename(data, 'md'), content, 'text/markdown')
+    triggerDownload(safeFilename(data, 'md'), toBinMarkdown(rows), 'text/markdown')
+  }
+}
+
+/** 小红书账号 */
+export function exportXHSAccount(data: any, format: string): void {
+  if (!data) return
+  const account = toRows(data)[0]
+  const nickname = (account?.nickname || account?.userId || '账号').replace(/[\\/:*?"<>|\n\r]/g, '_').slice(0, 40)
+
+  // 解析 noteListText → 结构化列表
+  // 格式：#N [title](url) | 点赞 N
+  const noteList: { no: number; title: string; url: string; likes: number | '' }[] = []
+  const noteListText: string = account?.noteListText || ''
+  for (const line of noteListText.split('\n')) {
+    const m = line.match(/^#(\d+)\s+\[(.+?)\]\((.+?)\)(?:\s*\|\s*点赞\s*(\d+))?/)
+    if (m) noteList.push({ no: Number(m[1]), title: m[2], url: m[3], likes: m[4] ? Number(m[4]) : '' })
+  }
+
+  if (format === 'csv') {
+    // 文件1：账号基础信息
+    const accountRow = { ...account }
+    delete accountRow.noteListText
+    triggerDownload(`${nickname}.csv`, toCsv(accountRow), 'text/csv')
+
+    // 文件2：笔记列表
+    if (noteList.length > 0) {
+      const header = '编号,标题,点赞,链接'
+      const rows = noteList.map(n => [n.no, csvCell(n.title), n.likes, n.url].join(','))
+      const csv = '\uFEFF' + [header, ...rows].join('\n')
+      triggerDownload(`${nickname}-发布笔记列表.csv`, csv, 'text/csv')
+    }
+  } else if (format === 'markdown') {
+    // Obsidian frontmatter（跳过 noteListText，单独输出笔记列表）
+    const accountWithoutNotes = { ...account, noteListText: undefined }
+    const frontmatter = toObsidianMarkdown(accountWithoutNotes)
+
+    const noteLines = noteList.length > 0
+      ? ['\n## 笔记列表\n', ...noteList.map(n => `${n.no}. [${n.title}](${n.url})${n.likes !== '' ? ' | 点赞 ' + n.likes : ''}`)]
+      : ['\n## 笔记列表\n', '暂无笔记']
+
+    triggerDownload(`${nickname}.md`, [frontmatter, ...noteLines].join('\n'), 'text/markdown')
+  }
+}
+
+/** 公众号文章 */
+export function exportWechatArticle(data: any, format: string): void {
+  if (!data) return
+  if (format === 'csv') {
+    triggerDownload(safeFilename(data, 'csv'), toCsv(data), 'text/csv')
+  } else if (format === 'markdown') {
+    const rows = toRows(data)
+    const content = rows.length === 1 ? toObsidianMarkdown(rows[0]) : rows.map(toObsidianMarkdown).join('\n\n---\n\n')
+    triggerDownload(safeFilename(data, 'md'), content, 'text/markdown')
+  }
+}
+
+/** 飞书文档 */
+export function exportFeishuDoc(data: any, format: string): void {
+  if (!data) return
+  if (format === 'csv') {
+    triggerDownload(safeFilename(data, 'csv'), toCsv(data), 'text/csv')
+  } else if (format === 'markdown') {
+    const rows = toRows(data)
+    const content = rows.length === 1 ? toObsidianMarkdown(rows[0]) : rows.map(toObsidianMarkdown).join('\n\n---\n\n')
+    triggerDownload(safeFilename(data, 'md'), content, 'text/markdown')
+  }
+}
+
+/** 小红书笔记详情（CSV / Markdown 都打包成 ZIP，含图片） */
+export async function exportXHSNoteDetail(note: XiaohongshuNote, format: string): Promise<void> {
+  if (!note) return
+
+  const datePrefix = (note.publishTimeStr || '').replace(/\s.+/, '').replace(/[^\d-]/g, '-') || new Date().toISOString().slice(0, 10)
+  const titleSafe = (note.title || '笔记').replace(/[\\/:*?"<>|\n\r]/g, '_').slice(0, 40)
+
+  // 解析图片 URL 列表（imageUrls 是逗号分隔的字符串）
+  const imageUrls: string[] = []
+  if (note.coverUrl) imageUrls.push(note.coverUrl)
+  if (note.imageUrls) {
+    const extras = note.imageUrls.split(',').map((u) => u.trim()).filter(Boolean)
+    for (const u of extras) {
+      if (!imageUrls.includes(u)) imageUrls.push(u)
     }
   }
+
+  // 下载图片，失败则跳过
+  const imageFiles: { filename: string; data: Uint8Array }[] = []
+  for (let i = 0; i < imageUrls.length; i++) {
+    const ext = imageUrls[i].match(/\.(jpe?g|png|webp|gif)/i)?.[1] || 'jpg'
+    const filename = i === 0 ? `cover.${ext}` : `image_${i}.${ext}`
+    try {
+      const res = await browser.runtime.sendMessage({
+        type: MessageTypes.HTTPRequest,
+        payload: {
+          url: imageUrls[i],
+          init: {
+            method: 'GET',
+            credentials: 'omit',
+            headers: { Accept: 'image/*,*/*;q=0.8' },
+            referrer: 'https://www.xiaohongshu.com/',
+            referrerPolicy: 'strict-origin-when-cross-origin'
+          }
+        }
+      })
+      if (res?.ok && res.body) {
+        const bytes = new Uint8Array(res.body as number[])
+        console.log(`[CJDB] 图片 ${filename} 大小: ${bytes.byteLength} bytes`)
+        imageFiles.push({ filename, data: bytes })
+      }
+    } catch {
+      // 图片抓取失败则跳过，不影响 ZIP 生成
+    }
+  }
+
+  const imageFilenames = imageFiles.map((f) => f.filename)
+  const JSZip = (await import('jszip')).default
+  const zip = new JSZip()
+
+  if (format === 'csv') {
+    zip.file(`${titleSafe}.csv`, toCsv(note))
+  } else {
+    const mdFilename = `${datePrefix}-${titleSafe}.md`
+    zip.file(mdFilename, toNoteDetailMarkdown(note, imageFilenames))
+  }
+
+  for (const { filename, data } of imageFiles) {
+    zip.file(filename, data)
+  }
+
+  const zipBytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+  triggerDownload(`${datePrefix}-${titleSafe}.zip`, zipBytes, 'application/zip')
 }

@@ -101,7 +101,7 @@
             :disabled="editingStoreIdx !== null"
             @change="handleTypeChange">
             <el-option
-              v-for="storeType in [StoreType.Local, StoreType.Notion, StoreType.Feishu]"
+              v-for="storeType in [StoreType.Local, StoreType.Feishu, StoreType.Notion]"
               :key="storeType"
               :label="STORE_SCHEMA[storeType]?.label ?? storeType"
               :value="storeType"
@@ -342,7 +342,7 @@ import { Setting, EditPen, Delete, MoreFilled, ArrowDown } from '@element-plus/i
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeCrawlData } from '@/stores/Store'
 import { storeConfig, STORE_SCHEMA } from '@/config/StoreConfig'
-import { exportFile } from '@/utils/exportFile'
+import { exportXHSFeed, exportXHSAccount, exportWechatArticle, exportFeishuDoc, exportXHSNoteDetail } from '@/utils/exportFile'
 import { getDajialaApiKey, setDajialaApiKey, augmentWechatArticlesWithApiData, augmentWechatArticlesWithPrincipalInfo, fetchPrincipalInfo } from '@/utils/dajialaApi'
 import { _fetch } from '@/utils/_fetch'
 import { parseNotionDatabaseId } from '@/utils/notion'
@@ -984,7 +984,7 @@ function handleTypeChange() {
 // 打开添加配置弹窗（与小红书完全相同的逻辑）
 function openAddConfig() {
   editingStoreIdx.value = null
-  configForm.value = { type: StoreType.Notion }
+  configForm.value = { type: StoreType.Local }
   showStoreSelector.value = false
   showConfig.value = true
 }
@@ -993,7 +993,7 @@ function openAddConfig() {
 function closeConfig() {
   showConfig.value = false
   editingStoreIdx.value = null
-  configForm.value = { type: StoreType.Notion }
+  configForm.value = { type: StoreType.Local }
 }
 
 // 打开编辑配置弹窗（与小红书完全相同的逻辑）
@@ -1065,13 +1065,13 @@ async function saveConfig() {
   ;(config as Record<string, unknown>).name = name?.trim() || ''
   if (isEdit && editingStoreIdx.value !== null) {
     await storeConfig.updateStore(currentCollectionType.value, editingStoreIdx.value, {
-      type: type ?? StoreType.Notion,
+      type: type ?? StoreType.Local,
       config: config as Record<string, unknown>
     })
     ElMessage.success('已更新')
   } else {
     await storeConfig.addStore(currentCollectionType.value, {
-      type: type ?? StoreType.Notion,
+      type: type ?? StoreType.Local,
       config: config as Record<string, unknown>
     })
     ElMessage.success('配置已保存')
@@ -1226,7 +1226,18 @@ async function confirmAndSave(options: PreviewConfirmOptions = {}) {
     for (const r of results) {
       const res = r as any
       if (res.exportFormat && res.exportData && res.exportType) {
-        exportFile(res.exportType, res.exportData, res.exportFormat)
+        const { exportType, exportData, exportFormat } = res
+        if (exportType === CollectionType.XHSNoteDetail) {
+          await exportXHSNoteDetail(exportData, exportFormat)
+        } else if (exportType === CollectionType.XHSFeed) {
+          exportXHSFeed(exportData, exportFormat)
+        } else if (exportType === CollectionType.XHSAccount) {
+          exportXHSAccount(exportData, exportFormat)
+        } else if (exportType === CollectionType.WechatArticle) {
+          exportWechatArticle(exportData, exportFormat)
+        } else if (exportType === CollectionType.FeishuDoc) {
+          exportFeishuDoc(exportData, exportFormat)
+        }
       }
     }
 

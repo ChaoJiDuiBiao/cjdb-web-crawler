@@ -176,7 +176,7 @@ export default defineBackground(() => {
             if (!reqInit.credentials) reqInit.credentials = 'omit'
 
             const res = await fetch(url, reqInit)
-            const body = await res.arrayBuffer()
+            const arrayBuffer = await res.arrayBuffer()
             const headers: Array<[string, string]> = []
             res.headers.forEach((v, k) => headers.push([k, v]))
             sendResponse({
@@ -184,7 +184,8 @@ export default defineBackground(() => {
               status: res.status,
               statusText: res.statusText,
               headers,
-              body
+              // ArrayBuffer 无法经 sendMessage 传递，转为普通数组
+              body: Array.from(new Uint8Array(arrayBuffer))
             })
           } catch (e: any) {
             sendResponse({ ok: false, error: e?.message || '请求失败' })

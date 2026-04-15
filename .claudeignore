@@ -1,3 +1,6 @@
 小红书数据抓取/
 output/
 cjdb-wxt/output/
+cjdb-wxt/node_modules/
+cjdb-wxt/.wxt/
+cjdb-wxt/package-lock.json

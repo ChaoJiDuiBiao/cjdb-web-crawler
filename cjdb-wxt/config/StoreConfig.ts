@@ -74,9 +74,8 @@ export const STORE_SCHEMA: Record<
         inputType: 'select',
         defaultValue: '',
         options: [
-          { value: '', label: '仅保存（不导出文件）' },
           { value: 'csv', label: 'CSV（Excel 可直接打开）' },
-          { value: 'markdown', label: 'Markdown（Obsidian Database 格式）' }
+          { value: 'markdown', label: 'Markdown（可文本编辑器打开）' }
         ]
       }
     ],
@@ -235,7 +234,7 @@ async function addStore(collectionType: CollectionType, store: Partial<Store>) {
     s.is_selected = false
   })
   list.push({
-    type: (store.type ?? StoreType.Notion) as StoreType,
+    type: (store.type ?? StoreType.Local) as StoreType,
     is_selected: true,
     config: store.config ?? {}
   })
