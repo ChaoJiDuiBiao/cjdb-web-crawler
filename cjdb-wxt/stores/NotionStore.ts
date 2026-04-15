@@ -315,6 +315,54 @@ async function uploadImagesByUrl(
   })
 }
 
+async function uploadVideoByUrl(
+  api: NotionAPI,
+  url: string,
+  opts?: { fromTabId?: number }
+): Promise<UploadedImageResult> {
+  const fallbackName = 'video-1.mp4'
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 120000) // 视频下载最多等 2 分钟
+  try {
+    showPanelTip('正在上传视频...', opts?.fromTabId)
+    const response = await fetch(url, {
+      method: 'GET',
+      credentials: 'omit',
+      headers: { Accept: 'video/*,*/*;q=0.8' },
+      referrer: 'https://www.xiaohongshu.com/',
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      signal: controller.signal
+    })
+    clearTimeout(timer)
+
+    if (!response.ok) throw new Error(`下载失败: ${response.status}`)
+    const blob = await response.blob()
+    if (!blob || blob.size <= 0) throw new Error('下载为空文件')
+    if (blob.size > NOTION_FILE_MAX_SIZE) {
+      throw new Error(`视频超过 20MB，当前 ${(blob.size / (1024 * 1024)).toFixed(2)}MB`)
+    }
+
+    const contentType = response.headers.get('content-type') || blob.type || 'video/mp4'
+    const filename = inferFilenameFromUrl(url, 0, contentType) || `video-1.${extFromContentType(contentType)}`
+    const fileUploadId = await api.uploadFileBlobToNotion(blob, filename, contentType)
+
+    return {
+      url,
+      ok: true,
+      file: { type: 'file_upload', name: filename, file_upload: { id: fileUploadId } }
+    }
+  } catch (e: any) {
+    clearTimeout(timer)
+    console.warn('[Notion] 视频上传失败，回退 external:', url, e?.message || e)
+    return {
+      url,
+      ok: false,
+      error: String(e?.message || e || '上传失败'),
+      file: { type: 'external', name: fallbackName, external: { url } }
+    }
+  }
+}
+
 class NotionAPI {
   apiKey: string
   databaseId: string
@@ -595,7 +643,8 @@ async function toNotionProperties(
   schema: any,
   fieldNameMap: Record<string, string>,
   api: NotionAPI,
-  isUpdate = false
+  isUpdate = false,
+  fromTabId?: number
 ) {
   const nowStart = new Date().toISOString()
 
@@ -613,6 +662,7 @@ async function toNotionProperties(
     content: '正文',
     coverUrl: '封面',
     imageUrls: '图片',
+    videoUrl: '视频',
     tags: '标签',
     likes: '点赞量',
     favorites: '收藏量',
@@ -740,8 +790,9 @@ async function toNotionProperties(
       if (urls.length === 0) {
         propValue = null
       } else {
-        const shouldDownloadImages = raw?.downloadImages !== false
-        if (!shouldDownloadImages) {
+        const isVideoField = keys.includes('videoUrl')
+        const shouldDownload = raw?.downloadImages !== false
+        if (!shouldDownload) {
           propValue = {
             files: urls.map((url, index) => ({
               type: 'external',
@@ -749,6 +800,9 @@ async function toNotionProperties(
               external: { url }
             }))
           }
+        } else if (isVideoField) {
+          const result = await uploadVideoByUrl(api, urls[0], { fromTabId })
+          propValue = { files: [result.file] }
         } else {
           const uploaded = await uploadImagesByUrl(api, urls, {
             concurrency: DEFAULT_IMAGE_UPLOAD_CONCURRENCY,
@@ -863,7 +917,7 @@ async function saveXhsNoteToNotion(
 
       showPanelTip('正在查询是否已存在该笔记...', fromTabId)
       const existing = await api.findByUniqueField(schema, 'URL', url)
-      const props = await toNotionProperties(data, schema, api.fieldNameMap, api, !!existing)
+      const props = await toNotionProperties(data, schema, api.fieldNameMap, api, !!existing, fromTabId)
 
       // 转换 commentList 为 blocks
       const children = data.commentList ? convertCommentListToBlocks(data.commentList) : null
@@ -922,7 +976,8 @@ async function saveXhsFeedToNotion(
       schema,
       api.fieldNameMap,
       api,
-      false
+      false,
+      fromTabId
     )
     const children = convertXhsSearchResultsToBlocks(items, keyword)
     const result = await api.createPage(props, children)
@@ -999,7 +1054,7 @@ async function saveWechatArticlesToNotion(
     await Promise.all(
       batch.map(async ({ item, idx, pageId }) => {
         try {
-          const props = await toNotionProperties(item, schema, api.fieldNameMap, api, true)
+          const props = await toNotionProperties(item, schema, api.fieldNameMap, api, true, fromTabId)
           await api.updatePage(pageId, props)
           const markdown = convertRichTextToMarkdown(item)
           if (markdown) {
@@ -1027,7 +1082,7 @@ async function saveWechatArticlesToNotion(
     await Promise.all(
       batch.map(async ({ item, idx }) => {
         try {
-          const props = await toNotionProperties(item, schema, api.fieldNameMap, api, false)
+          const props = await toNotionProperties(item, schema, api.fieldNameMap, api, false, fromTabId)
           const markdown = convertRichTextToMarkdown(item)
           const result = await api.createPage(props, null, markdown || undefined)
           results[idx] = { ok: true, action: 'create', pageId: result?.id }
@@ -1070,7 +1125,7 @@ async function saveFeishuDocsToNotion(
     try {
       showPanelTip(`正在处理第 ${i + 1}/${items.length} 篇飞书文档...`, fromTabId)
       const existing = await api.findByUniqueField(schema, 'URL', url)
-      const props = await toNotionProperties(item, schema, api.fieldNameMap, api, !!existing)
+      const props = await toNotionProperties(item, schema, api.fieldNameMap, api, !!existing, fromTabId)
       const markdown = convertRichTextToMarkdown(item)
 
       if (existing) {
@@ -1121,7 +1176,7 @@ async function saveXhsAccountToNotion(
 
       showPanelTip('正在查询是否已存在该账号...', fromTabId)
       const existing = await api.findByUniqueField(schema, '账号ID', userId)
-      const props = await toNotionProperties(data, schema, api.fieldNameMap, api, !!existing)
+      const props = await toNotionProperties(data, schema, api.fieldNameMap, api, !!existing, fromTabId)
 
       // 转换 noteListText 为 blocks
       const children = data.noteListText ? convertNoteListToBlocks(data.noteListText) : null

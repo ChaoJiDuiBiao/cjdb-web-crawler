@@ -20,7 +20,7 @@
         class="store-item"
         :class="{ active: store.is_selected }"
         @click="selectStore(index)">
-        <span class="store-item-label" style="color:black" >{{ storeConfig.getStoreLabel(store as Store) }}</span>
+        <span class="store-item-label">{{ storeConfig.getStoreLabel(store as Store) }}</span>
         <el-dropdown
           trigger="click"
           placement="bottom-end"
@@ -1324,30 +1324,31 @@ onMounted(async () => {
   display: flex;
   gap: 4px;
   padding: 4px;
-  background: rgba(255, 255, 255, 0.9);
+  background: #101111;
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset;
 }
 .mode-item {
   padding: 6px 12px;
   font-size: 12px;
   border-radius: 6px;
   cursor: pointer;
-  color: #606266;
-  transition: all 0.2s;
+  color: #9c9c9d;
+  transition: opacity 0.2s, color 0.2s, background 0.2s;
   &:hover {
-    color: #409eff;
+    color: #f9f9f9;
   }
   &.active {
-    background: #ecf5ff;
-    color: #409eff;
+    background: rgba(85, 179, 255, 0.15);
+    color: #55b3ff;
     font-weight: 500;
   }
   &.disabled {
-    color: #c0c4cc;
+    color: #434345;
     cursor: not-allowed;
     &:hover {
-      color: #c0c4cc;
+      color: #434345;
     }
   }
 }
@@ -1390,9 +1391,11 @@ onMounted(async () => {
 
 .history-options {
   padding: 10px 12px;
-  background: #f9fafb;
+  background: #07080a;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
   font-size: 13px;
+  color: #9c9c9d;
 }
 
 .history-list-header {
@@ -1400,13 +1403,13 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   font-size: 13px;
-  color: #606266;
+  color: #9c9c9d;
 }
 
 .history-table-wrapper {
   max-height: 400px;
   overflow-y: auto;
-  border: 1px solid #ebeef5;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
 }
 
@@ -1414,18 +1417,19 @@ onMounted(async () => {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  color: #f9f9f9;
 
   thead {
     position: sticky;
     top: 0;
-    background: #f5f7fa;
+    background: #07080a;
     z-index: 1;
     th {
       padding: 10px 12px;
       font-weight: 500;
-      color: #606266;
+      color: #9c9c9d;
       text-align: left;
-      border-bottom: 1px solid #ebeef5;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     }
   }
 
@@ -1434,10 +1438,10 @@ onMounted(async () => {
       cursor: pointer;
       transition: background 0.2s;
       &:hover {
-        background: #f5f7fa;
+        background: rgba(255, 255, 255, 0.04);
       }
       &.checked {
-        background: #ecf5ff;
+        background: rgba(85, 179, 255, 0.1);
       }
       &.disabled {
         cursor: not-allowed;
@@ -1448,12 +1452,12 @@ onMounted(async () => {
       }
       &.failed {
         td {
-          background: #fef0f0;
+          background: rgba(255, 99, 99, 0.08);
         }
       }
       td {
         padding: 10px 12px;
-        border-bottom: 1px solid #ebeef5;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
       }
     }
   }
@@ -1464,7 +1468,7 @@ onMounted(async () => {
   width: 20px;
   text-align: center;
   font-weight: bold;
-  color: #409eff;
+  color: #55b3ff;
   display: inline-block;
 }
 
@@ -1482,7 +1486,7 @@ onMounted(async () => {
   max-width: 100%;
 
   &.failed {
-    color: #f56c6c;
+    color: #FF6363;
     font-weight: 500;
     cursor: help;
   }
@@ -1490,16 +1494,17 @@ onMounted(async () => {
 
 .history-date {
   font-size: 12px;
-  color: #909399;
+  color: #6a6b6c;
   white-space: nowrap;
 }
 
 .history-list {
   max-height: 320px;
   overflow-y: auto;
-  border: 1px solid #ebeef5;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
   padding: 4px;
+  background: #07080a;
 }
 .history-item {
   display: flex;
@@ -1509,8 +1514,10 @@ onMounted(async () => {
   border-radius: 4px;
   cursor: pointer;
   font-size: 13px;
-  &:hover { background: #f5f7fa; }
-  &.checked { background: #ecf5ff; }
+  color: #f9f9f9;
+  transition: background 0.2s;
+  &:hover { background: rgba(255, 255, 255, 0.04); }
+  &.checked { background: rgba(85, 179, 255, 0.1); }
 }
 
 .store-entry {
@@ -1525,28 +1532,29 @@ onMounted(async () => {
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.92);
+  background: #101111;
   border-radius: 20px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  box-shadow: rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset,
+              rgba(255, 255, 255, 0.15) 0px 0px 0px 1px,
+              rgba(0, 0, 0, 0.35) 0px 3px 12px;
   cursor: pointer;
-  transition: box-shadow 0.2s, background 0.2s;
-  backdrop-filter: blur(4px);
+  transition: opacity 0.2s;
+  backdrop-filter: blur(12px);
 
   &:hover {
-    background: #fff;
-    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
+    opacity: 0.7;
   }
 }
 
 .store-trigger-icon {
   font-size: 22px;
-  color: #409eff;
+  color: #f9f9f9;
   flex-shrink: 0;
 }
 
 .store-trigger-label {
   font-size: 12px;
-  color: #606266;
+  color: #9c9c9d;
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1559,11 +1567,25 @@ onMounted(async () => {
   bottom: calc(100% + 8px);
   right: 0;
   padding: 8px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: #101111;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: rgba(0, 0, 0, 0.5) 0px 0px 0px 2px,
+              rgba(255, 255, 255, 0.08) 0px 0px 20px,
+              rgb(7, 8, 10) 0px 0px 0px 1px inset;
   min-width: 180px;
   z-index: 10;
+
+  // 透明桥接区，填充 selector 与 trigger 之间的 8px 死区
+  // 防止鼠标经过间隙时触发 mouseleave 导致列表消失
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: -8px;
+    left: 0;
+    right: 0;
+    height: 8px;
+  }
 }
 
 .store-item {
@@ -1575,15 +1597,16 @@ onMounted(async () => {
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
+  color: #f9f9f9;
   transition: background 0.2s;
 
   &:hover {
-    background: #f5f5f5;
+    background: rgba(255, 255, 255, 0.05);
   }
 
   &.active {
-    background: #ecf5ff;
-    color: #409eff;
+    background: rgba(85, 179, 255, 0.15);
+    color: #55b3ff;
     font-weight: 500;
   }
 
@@ -1598,6 +1621,7 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #f9f9f9;
 }
 
 .store-item-menu {
@@ -1607,7 +1631,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #909399;
+  color: #6a6b6c;
   opacity: 0;
   transition: opacity 0.2s, color 0.2s;
   border-radius: 4px;
@@ -1619,21 +1643,21 @@ onMounted(async () => {
   }
 
   &:hover {
-    color: #606266;
-    background: rgba(0, 0, 0, 0.05);
+    color: #f9f9f9;
+    background: rgba(255, 255, 255, 0.08);
   }
 }
 
 .store-item-add {
   padding: 10px 12px;
   margin-top: 6px;
-  border-top: 1px solid #eee;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
   cursor: pointer;
   font-size: 13px;
-  color: #909399;
+  color: #6a6b6c;
 
   &:hover {
-    color: #409eff;
+    color: #55b3ff;
   }
 }
 
@@ -1644,7 +1668,20 @@ onMounted(async () => {
   border-radius: 50%;
   padding: 0;
   overflow: hidden;
-  transition: background-color 0.25s, border-color 0.25s;
+  transition: opacity 0.25s;
+
+  // Raycast dark surface override on el-button primary
+  background: #101111 !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: #f9f9f9 !important;
+  box-shadow: rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset,
+              rgba(255, 255, 255, 0.2) 0px 0px 0px 1px,
+              rgba(0, 0, 0, 0.45) 0px 6px 20px !important;
+
+  &:hover:not(.is-disabled):not(.collect-btn-busy) {
+    opacity: 0.7;
+    background: #101111 !important;
+  }
 
   :deep(.el-button__content) {
     display: flex;
@@ -1656,9 +1693,10 @@ onMounted(async () => {
   }
 
   &.collect-btn-busy {
-    background: linear-gradient(135deg, #e6a23c, #f0c14b) !important;
-    border-color: #e6a23c !important;
-    color: #fff !important;
+    background: linear-gradient(135deg, #e6a23c, #ffbc33) !important;
+    border-color: transparent !important;
+    color: #18191a !important;
+    box-shadow: rgba(255, 188, 51, 0.35) 0px 6px 20px !important;
   }
 
   .collect-btn-inner {
@@ -1707,16 +1745,20 @@ onMounted(async () => {
 
 .tip-display {
   padding: 10px 18px;
-  background: linear-gradient(135deg, rgba(64, 158, 255, 0.95), rgba(100, 180, 255, 0.95));
+  background: #101111;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 24px;
-  box-shadow: 0 4px 16px rgba(64, 158, 255, 0.3);
+  box-shadow: rgb(27, 28, 30) 0px 0px 0px 1px,
+              rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset,
+              rgba(0, 0, 0, 0.35) 0px 4px 16px;
   font-size: 13px;
-  color: #fff;
+  color: #f9f9f9;
   font-weight: 500;
   max-width: 280px;
   word-break: break-word;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(12px);
   transition: opacity 0.3s ease;
+  letter-spacing: 0.2px;
 }
 
 /* 透明度：最旧20%（上）、第二50%（中）、最新100%（下） */
@@ -1782,5 +1824,77 @@ onMounted(async () => {
 /* 数据库备注弹窗：层级高于配置弹窗，确保盖在前一个弹窗之上 */
 .el-overlay:has(.cjdb-remark-dialog) {
   z-index: 999999 !important;
+}
+
+/* Raycast 暗色主题：覆盖 el-dialog 样式 */
+.cjdb-config-dialog,
+.cjdb-remark-dialog {
+  .el-dialog {
+    background: #101111 !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    box-shadow: rgba(0, 0, 0, 0.5) 0px 0px 0px 2px,
+                rgba(255, 255, 255, 0.06) 0px 0px 20px,
+                rgb(7, 8, 10) 0px 0px 0px 1px inset !important;
+  }
+
+  .el-dialog__header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding-bottom: 16px;
+  }
+
+  .el-dialog__title {
+    color: #f9f9f9 !important;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+  }
+
+  .el-dialog__headerbtn .el-dialog__close {
+    color: #6a6b6c !important;
+    &:hover { color: #f9f9f9 !important; }
+  }
+
+  .el-form-item__label {
+    color: #9c9c9d !important;
+    font-size: 13px;
+  }
+
+  .el-input__wrapper {
+    background: #07080a !important;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset !important;
+
+    &.is-focus {
+      box-shadow: 0 0 0 1px rgba(85, 179, 255, 0.5) inset !important;
+    }
+  }
+
+  .el-input__inner {
+    color: #f9f9f9 !important;
+    &::placeholder { color: #434345 !important; }
+  }
+
+  .el-select__wrapper {
+    background: #07080a !important;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset !important;
+    color: #f9f9f9 !important;
+  }
+
+  .el-dialog__footer {
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 16px;
+
+    .el-button {
+      background: rgba(255, 255, 255, 0.05) !important;
+      border-color: rgba(255, 255, 255, 0.1) !important;
+      color: #9c9c9d !important;
+      &:hover { color: #f9f9f9 !important; opacity: 0.8; }
+    }
+
+    .el-button--primary {
+      background: rgba(85, 179, 255, 0.15) !important;
+      border-color: rgba(85, 179, 255, 0.3) !important;
+      color: #55b3ff !important;
+      &:hover { opacity: 0.8; }
+    }
+  }
 }
 </style>

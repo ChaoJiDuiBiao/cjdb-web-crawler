@@ -231,7 +231,26 @@ function toBinMarkdown(rows: any[]): string {
 
 // ─── NoteDetail Markdown（2.2 格式，含图片引用和评论）─────────────────────
 
-function toNoteDetailMarkdown(note: XiaohongshuNote, imageFilenames: string[]): string {
+function toNoteDetailMarkdown(note: XiaohongshuNote): string {
+  // 推导图片文件名（与 exportXHSNoteDetail 下载时的命名规则一致）
+  const imageUrls: string[] = []
+  if (note.coverUrl) imageUrls.push(note.coverUrl)
+  if (note.imageUrls) {
+    const extras = note.imageUrls.split(',').map((u) => u.trim()).filter(Boolean)
+    for (const u of extras) {
+      if (!imageUrls.includes(u)) imageUrls.push(u)
+    }
+  }
+  const imageFilenames = imageUrls.map((url, i) => {
+    const ext = url.match(/\.(jpe?g|png|webp|gif)/i)?.[1] || 'jpg'
+    return i === 0 ? `cover.${ext}` : `image_${i}.${ext}`
+  })
+
+  // 推导视频文件名
+  const videoFilename = note.videoUrl
+    ? `video.${note.videoUrl.match(/\.(mp4|mov|m4v|webm)/i)?.[1] || 'mp4'}`
+    : null
+
   const imageRefs = imageFilenames.map((f, i) => `![图${i + 1}](${f})`).join('\n')
 
   const frontmatter = [
@@ -256,6 +275,10 @@ function toNoteDetailMarkdown(note: XiaohongshuNote, imageFilenames: string[]): 
       cellRows.push('| ' + chunk.map((f, j) => f ? `![图${i + j + 1}](${f})` : '').join(' | ') + ' |')
     }
     bodyParts.push('## 配图', '', headerRow, separatorRow, ...cellRows, '')
+  }
+
+  if (videoFilename) {
+    bodyParts.push('## 视频', '', `![视频](${videoFilename})`, '')
   }
 
   bodyParts.push('## 正文', '', note.content || '')
@@ -401,7 +424,33 @@ export async function exportXHSNoteDetail(note: XiaohongshuNote, format: string)
     }
   }
 
-  const imageFilenames = imageFiles.map((f) => f.filename)
+  // 下载视频，失败则跳过（直接 fetch，不走 background 代理，避免大文件走 sendMessage 超限）
+  let videoFile: { filename: string; data: Uint8Array } | null = null
+  if (note.videoUrl) {
+    const ext = note.videoUrl.match(/\.(mp4|mov|m4v|webm)/i)?.[1] || 'mp4'
+    const filename = `video.${ext}`
+    try {
+      const res = await fetch(note.videoUrl, {
+        method: 'GET',
+        credentials: 'omit',
+        headers: { Accept: 'video/*,*/*;q=0.8' },
+        referrer: 'https://www.xiaohongshu.com/',
+        referrerPolicy: 'strict-origin-when-cross-origin'
+      })
+      if (res.ok) {
+        const arrayBuffer = await res.arrayBuffer()
+        const bytes = new Uint8Array(arrayBuffer)
+        console.log(`[CJDB] 视频 ${filename} 大小: ${bytes.byteLength} bytes`)
+        videoFile = { filename, data: bytes }
+      } else {
+        console.warn(`[CJDB] 视频下载失败: ${res.status} ${res.statusText}`)
+      }
+    } catch (e) {
+      console.warn(`[CJDB] 视频下载失败，跳过:`, e)
+      // 视频抓取失败则跳过，不影响 ZIP 生成
+    }
+  }
+
   const JSZip = (await import('jszip')).default
   const zip = new JSZip()
 
@@ -409,11 +458,14 @@ export async function exportXHSNoteDetail(note: XiaohongshuNote, format: string)
     zip.file(`${titleSafe}.csv`, toCsv(note))
   } else {
     const mdFilename = `${datePrefix}-${titleSafe}.md`
-    zip.file(mdFilename, toNoteDetailMarkdown(note, imageFilenames))
+    zip.file(mdFilename, toNoteDetailMarkdown(note))
   }
 
   for (const { filename, data } of imageFiles) {
     zip.file(filename, data)
+  }
+  if (videoFile) {
+    zip.file(videoFile.filename, videoFile.data)
   }
 
   const zipBytes = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })

@@ -45,6 +45,7 @@ const previewText = computed(() => {
     `标题: ${(data.title || '-').slice(0, 80)}`,
     `URL: ${data.url || '-'}`,
     `封面: ${data.coverUrl || '-'}`,
+    `视频: ${data.videoUrl || '-'}`,
     `作者: ${data.authorNickname || '-'} | 粉丝: ${data.authorFansCount ?? '-'} | 获赞: ${data.authorLikes ?? '-'}`,
     `发布时间: ${data.publishTimeStr || '-'} | 地点: ${data.location || '-'}`,
     `点赞: ${data.likes ?? '-'} | 收藏: ${data.favorites ?? '-'} | 评论: ${data.comments ?? '-'}`,

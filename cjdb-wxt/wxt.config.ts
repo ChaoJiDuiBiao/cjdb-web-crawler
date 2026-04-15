@@ -19,7 +19,8 @@ export default defineConfig({
     key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwHhl57Hg2u291PVeL6X1GTJgUjsul5WeQaVER4vHKVTUnraQ7I2PI8rPCo0TsRJTNix7ikHTiaIBGG3PGtzp5jy0q3FbqCleMRFka4Daywk3dDHHXcBr/Jkp4RxOsJumq4haM+1yPhMZjTmT99K06sXWcfuRcIW4HqCEYNtsMWllF/7XtpKWF97GmfYz0AorXZKPtdswipMloRmYNYHpft8htS3SIc8J9/tjlsQHp6G+nyYgLw1X1kIoCSwvlRC/aMGqlei/sTdZWvSecq5XidaDDb7fAOJGQFfE6V+LsKCRntY0uwa722JVd0ZHQFtCOF8QKWiGDJRgcAk8k0ozSQIDAQAB',
     name: 'CJDB 数据抓取',
     description: '小红书、公众号、飞书文档采集工具',
-    permissions: ['storage', 'activeTab'],
+    // scripting：小红书 noteDetail 在 window.__INITIAL_STATE__，bridge 无响应时用 executeScript(MAIN) 兜底
+    permissions: ['storage', 'activeTab', 'scripting'],
     // content.css 需可被 Shadow DOM 内 link 加载，用于样式隔离
     web_accessible_resources: [
       {

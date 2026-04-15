@@ -202,6 +202,8 @@ export enum MessageTypes {
   DajialaPrincipalInfo = 'cjdb-dajiala-principal-info',
   DajialaFetchArticleHtml = 'cjdb-dajiala-fetch-article-html',
   DajialaArticleDetail = 'cjdb-dajiala-article-detail',
+  /** 在目标 tab 的 MAIN world 读取 __INITIAL_STATE__.note.noteDetailMap（bridge 超时/无响应时兜底） */
+  XhsNoteDetailMain = 'cjdb-xhs-note-detail-main',
 }
 
 // 供 storeCrawlData payload 使用
