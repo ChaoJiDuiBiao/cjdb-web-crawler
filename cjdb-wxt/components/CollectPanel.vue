@@ -1908,18 +1908,21 @@ onMounted(async () => {
   z-index: 999999 !important;
 }
 
-/* Raycast 暗色主题：覆盖 el-dialog 样式 */
+/* Raycast 暗色主题：覆盖 el-dialog 样式
+ * 关键：el-dialog 的 class 属性直接挂在 .el-dialog 元素本身
+ * 所以用 .cjdb-config-dialog { } 而非 .cjdb-config-dialog .el-dialog { }
+ */
 .cjdb-config-dialog,
 .cjdb-remark-dialog {
-  .el-dialog {
-    background: #101111 !important;
-    border: 1px solid rgba(255, 255, 255, 0.06) !important;
-    box-shadow: rgba(0, 0, 0, 0.5) 0px 0px 0px 2px,
-                rgba(255, 255, 255, 0.06) 0px 0px 20px,
-                rgb(7, 8, 10) 0px 0px 0px 1px inset !important;
-  }
+  /* 弹窗根元素（.el-dialog 本身） */
+  background: #101111 !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  box-shadow: rgba(0, 0, 0, 0.5) 0px 0px 0px 2px,
+              rgba(255, 255, 255, 0.06) 0px 0px 20px,
+              rgb(7, 8, 10) 0px 0px 0px 1px inset !important;
 
   .el-dialog__header {
+    background: #101111;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     padding-bottom: 16px;
   }
@@ -1933,6 +1936,11 @@ onMounted(async () => {
   .el-dialog__headerbtn .el-dialog__close {
     color: #6a6b6c !important;
     &:hover { color: #f9f9f9 !important; }
+  }
+
+  .el-dialog__body {
+    background: #101111;
+    color: #f9f9f9;
   }
 
   .el-form-item__label {
@@ -1951,6 +1959,7 @@ onMounted(async () => {
 
   .el-input__inner {
     color: #f9f9f9 !important;
+    background: transparent !important;
     &::placeholder { color: #434345 !important; }
   }
 
@@ -1960,7 +1969,14 @@ onMounted(async () => {
     color: #f9f9f9 !important;
   }
 
+  /* select 已选中值的文字 */
+  .el-select__selected-item span,
+  .el-select__placeholder {
+    color: #f9f9f9 !important;
+  }
+
   .el-dialog__footer {
+    background: #101111;
     border-top: 1px solid rgba(255, 255, 255, 0.06);
     padding-top: 16px;
 
@@ -1977,6 +1993,20 @@ onMounted(async () => {
       color: #55b3ff !important;
       &:hover { opacity: 0.8; }
     }
+  }
+}
+
+/* 存储类型 select 下拉 popper 暗色主题（teleported 到 body 外，需独立选择器） */
+.cjdb-store-select-popper {
+  background: #101111 !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 16px !important;
+
+  .el-select-dropdown__item {
+    color: #9c9c9d;
+    &:hover { background: rgba(255, 255, 255, 0.05) !important; color: #f9f9f9; }
+    &.is-selected { color: #55b3ff !important; background: rgba(85, 179, 255, 0.1) !important; }
+    &.is-disabled { color: #434345 !important; }
   }
 }
 </style>
