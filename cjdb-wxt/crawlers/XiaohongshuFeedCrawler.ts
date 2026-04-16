@@ -6,6 +6,7 @@ interface NoteCollectionItem {
   no: number
   checked: boolean
   title: string
+  searchKeyword: string   // marker 时锁定的关键词，不随后续搜索变化
   coverUrl?: string
   likes?: number
   authorNickname?: string
@@ -20,6 +21,7 @@ export class XiaohongshuFeedCrawler {
   noteCollection: Map<string, NoteCollectionItem> = new Map()
   noteCounter = 0
   lastFeedUrl = ''
+  lastSearchKeyword = ''   // marker 时记录的最新关键词
 
   canHandle(url: string): boolean {
     return /xiaohongshu\.com\/explore(?:\?|$)/.test(url) ||
@@ -33,14 +35,18 @@ export class XiaohongshuFeedCrawler {
       ;(window as any).CJDB_TipsDisplay?.(msg, false)
     }
 
-    const searchKeyword = this.getSearchKeyword()
+    // 实时读当前关键词（优先 URL 参数），避免依赖缓存导致关键词过时
+    const currentKeyword = this.getSearchKeyword()
 
-    showTip(`正在采集搜索结果${searchKeyword ? `（${searchKeyword}）` : ''}...`)
+    showTip(`正在采集搜索结果${currentKeyword ? `（${currentKeyword}）` : ''}...`)
 
     const results: XiaohongshuNote[] = []
 
     this.noteCollection.forEach((item, url) => {
       if (!item.checked) return
+
+      // 每条笔记使用自身 marker 时锁定的 searchKeyword
+      const searchKeyword = item.searchKeyword || currentKeyword
 
       const noteId = this.extractNoteIdFromUrl(url)
       const link = this.findNoteLinkInDom(url, noteId)
@@ -83,10 +89,12 @@ export class XiaohongshuFeedCrawler {
     const url = location.href
     const searchKeyword = this.getSearchKeyword()
 
-    if (url !== this.lastFeedUrl) {
+    // URL 或关键词任一变化，都重置采集列表
+    if (url !== this.lastFeedUrl || searchKeyword !== this.lastSearchKeyword) {
       this.noteCollection.clear()
       this.noteCounter = 0
       this.lastFeedUrl = url
+      this.lastSearchKeyword = searchKeyword
     }
 
     this.injectMarkerStyles()
@@ -105,6 +113,7 @@ export class XiaohongshuFeedCrawler {
         this.noteCollection.set(noteUrl, {
           no: this.noteCounter,
           checked: true,
+          searchKeyword,
           title: snapshot.title || item.querySelector('.title, .note-title, [class*="title"]')?.textContent?.trim() || '',
           coverUrl: snapshot.coverUrl,
           likes: snapshot.likes,
@@ -210,6 +219,13 @@ export class XiaohongshuFeedCrawler {
     }
   }
 
+  /** 发布时间常见文案（用于从卡片底部行中识别时间片段） */
+  private looksLikePublishTimeText(text: string): boolean {
+    const t = String(text || '').trim()
+    if (!t || t.length > 48) return false
+    return /(分钟前|小时前|天前|周前|星期前|昨天|今天|\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-月]\d{1,2}(?:日)?(?:\s*\d{1,2}:\d{1,2})?)/.test(t)
+  }
+
   private extractAuthorNickname(card: HTMLElement): string {
     const wrapper = this.findNameTimeWrapper(card)
     if (wrapper) {
@@ -220,9 +236,31 @@ export class XiaohongshuFeedCrawler {
       const nested = wrapper.querySelector('.name') as HTMLElement | null
       const nestedText = nested?.textContent?.trim() || ''
       if (nestedText) return nestedText
+
+      const profile = wrapper.querySelector('a[href*="/user/profile"]') as HTMLAnchorElement | null
+      const fromProfile = profile?.textContent?.trim() || ''
+      if (fromProfile) return fromProfile
+
+      const leafs = Array.from(wrapper.querySelectorAll('span, a')) as HTMLElement[]
+      for (const el of leafs) {
+        const piece = el.textContent?.trim() || ''
+        if (!piece || piece.length > 48) continue
+        if (this.looksLikePublishTimeText(piece)) continue
+        if (/^[\d.]+$/.test(piece)) continue
+        if (/赞|收藏|评论/.test(piece)) continue
+        return piece
+      }
+
+      const full = wrapper.textContent?.replace(/\s+/g, ' ').trim() || ''
+      const seg = full.split(/[·•|]/).map((s) => s.trim()).filter(Boolean)
+      if (seg.length) {
+        const first = seg[0]
+        if (first && !this.looksLikePublishTimeText(first)) return first
+      }
     }
 
-    return ''
+    const profile2 = card.querySelector('a[href*="/user/profile"]') as HTMLAnchorElement | null
+    return profile2?.textContent?.trim() || ''
   }
 
   private extractPublishTimeText(card: HTMLElement): string {
@@ -235,20 +273,65 @@ export class XiaohongshuFeedCrawler {
       const nested = wrapper.querySelector('.time') as HTMLElement | null
       const nestedText = nested?.textContent?.trim() || ''
       if (nestedText) return nestedText
+
+      const leafs = Array.from(wrapper.querySelectorAll('span, a, div')) as HTMLElement[]
+      for (const el of leafs) {
+        const piece = el.textContent?.trim() || ''
+        if (piece && this.looksLikePublishTimeText(piece)) return piece
+      }
+
+      const full = wrapper.textContent?.replace(/\s+/g, ' ').trim() || ''
+      const seg = full.split(/[·•|]/).map((s) => s.trim()).filter(Boolean)
+      for (let i = seg.length - 1; i >= 0; i--) {
+        if (this.looksLikePublishTimeText(seg[i])) return seg[i]
+      }
+    }
+
+    const broad = Array.from(card.querySelectorAll('span, div')) as HTMLElement[]
+    for (const el of broad) {
+      const piece = el.textContent?.trim() || ''
+      if (!piece || piece.length > 40) continue
+      if (!this.looksLikePublishTimeText(piece)) continue
+      if ((el.closest('.title, .note-title, [class*="title"]') as HTMLElement | null)?.contains(el)) continue
+      return piece
     }
 
     return ''
   }
 
   private findNameTimeWrapper(card: HTMLElement): HTMLElement | null {
-    const wrappers = Array.from(card.querySelectorAll('.name-time-wrapper')) as HTMLElement[]
-    for (const wrapper of wrappers) {
-      const hasName = !!Array.from(wrapper.children).find((el) => el.classList.contains('name')) || !!wrapper.querySelector('.name')
-      const hasTime = !!Array.from(wrapper.children).find((el) => el.classList.contains('time')) || !!wrapper.querySelector('.time')
-      if (hasName && hasTime) {
-        return wrapper
+    const hasLegacyNameTime = (wrapper: HTMLElement): boolean => {
+      const hasName =
+        !!Array.from(wrapper.children).find((el) => el.classList.contains('name')) || !!wrapper.querySelector('.name')
+      const hasTime =
+        !!Array.from(wrapper.children).find((el) => el.classList.contains('time')) || !!wrapper.querySelector('.time')
+      return hasName && hasTime
+    }
+
+    const legacy = Array.from(card.querySelectorAll('.name-time-wrapper')) as HTMLElement[]
+    for (const wrapper of legacy) {
+      if (hasLegacyNameTime(wrapper)) return wrapper
+    }
+
+    // CSS Modules：类名含 name-time 但带哈希
+    for (const wrapper of Array.from(card.querySelectorAll('[class*="name-time"]')) as HTMLElement[]) {
+      const cls = String(wrapper.className || '')
+      if (!/name-time/i.test(cls)) continue
+      const txt = (wrapper.textContent || '').replace(/\s+/g, ' ').trim()
+      if (!txt || txt.length > 200) continue
+      if (this.looksLikePublishTimeText(txt)) return wrapper
+    }
+
+    // 含用户主页链接且含时间文案的窄行（搜索卡片底部）
+    for (const a of Array.from(card.querySelectorAll('a[href*="/user/profile"]'))) {
+      let row: HTMLElement | null = a.parentElement as HTMLElement | null
+      for (let d = 0; d < 5 && row; d++) {
+        const t = (row.textContent || '').replace(/\s+/g, ' ').trim()
+        if (t.length > 0 && t.length < 120 && this.looksLikePublishTimeText(t)) return row
+        row = row.parentElement
       }
     }
+
     return null
   }
 
@@ -357,7 +440,7 @@ export class XiaohongshuFeedCrawler {
       const hasMedia = !!el.querySelector('img, video')
       const hasTitle = !!el.querySelector('.title, .note-title, [class*="title"]')
       const hasAuthorOrTime = !!el.querySelector(
-        '.name-time-wrapper .name, .name-time-wrapper .time, .author .name, .author-name, .time'
+        '.name-time-wrapper .name, .name-time-wrapper .time, .author .name, .author-name, .time, [class*="name-time"], a[href*="/user/profile"]'
       )
       if (hasMedia) fallback = el
       if (hasMedia && (hasTitle || hasAuthorOrTime)) {
@@ -388,16 +471,7 @@ export class XiaohongshuFeedCrawler {
       return value.trim()
     }
 
-    // 1) 优先从 DOM 搜索输入框读取
-    const input = document.querySelector(
-      'input[type="search"], input[placeholder*="搜索"], input[class*="search"], input[id*="search"]'
-    ) as HTMLInputElement | null
-    if (input?.value?.trim()) {
-      const fromDom = decodeKeyword(input.value)
-      if (fromDom) return fromDom
-    }
-
-    // 2) 其次从 URL 参数读取
+    // 1) 优先从 URL 参数读取（URL 在 XHS 导航时最先更新，比 DOM input 更可靠）
     const url = new URL(location.href)
     const candidates = [
       url.searchParams.get('keyword'),
@@ -408,6 +482,15 @@ export class XiaohongshuFeedCrawler {
       .filter(Boolean)
 
     if (candidates.length > 0) return candidates[0]
+
+    // 2) URL 无关键词参数时（如 /explore 首页），再读 DOM 搜索输入框
+    const input = document.querySelector(
+      'input[type="search"], input[placeholder*="搜索"], input[class*="search"], input[id*="search"]'
+    ) as HTMLInputElement | null
+    if (input?.value?.trim()) {
+      const fromDom = decodeKeyword(input.value)
+      if (fromDom) return fromDom
+    }
 
     return document.title.replace(' - 小红书', '').trim()
   }

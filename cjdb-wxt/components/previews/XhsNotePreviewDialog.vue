@@ -9,6 +9,11 @@
       <pre class="preview-json">{{ previewText }}</pre>
     </div>
 
+    <div class="option-section">
+      <el-checkbox v-model="downloadMediaChecked">同时下载并上传图片 / 原视频</el-checkbox>
+      <div v-if="!downloadMediaChecked" class="option-tip">关闭后 Notion/飞书仅用外链、本地 ZIP 也不打包图片与视频文件（默认开启）</div>
+    </div>
+
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
       <el-button type="primary" :loading="loading" @click="handleConfirm">
@@ -19,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { XiaohongshuNote } from '@/types'
 
 const props = defineProps<{
@@ -30,7 +35,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
-  (e: 'confirm', value: Record<string, never>): void
+  (e: 'confirm', value: { downloadImagesAndVideo: boolean }): void
   (e: 'close'): void
 }>()
 
@@ -39,12 +44,22 @@ const visible = computed({
   set: (value: boolean) => emit('update:modelValue', value)
 })
 
+const downloadMediaChecked = ref(true)
+
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (open) downloadMediaChecked.value = true
+  }
+)
+
 const previewText = computed(() => {
   const data = props.data || {}
   const lines = [
     `标题: ${(data.title || '-').slice(0, 80)}`,
     `URL: ${data.url || '-'}`,
     `封面: ${data.coverUrl || '-'}`,
+    `视频: ${data.videoUrl || '-'}`,
     `作者: ${data.authorNickname || '-'} | 粉丝: ${data.authorFansCount ?? '-'} | 获赞: ${data.authorLikes ?? '-'}`,
     `发布时间: ${data.publishTimeStr || '-'} | 地点: ${data.location || '-'}`,
     `点赞: ${data.likes ?? '-'} | 收藏: ${data.favorites ?? '-'} | 评论: ${data.comments ?? '-'}`,
@@ -65,7 +80,7 @@ const previewText = computed(() => {
 })
 
 function handleConfirm() {
-  emit('confirm', {})
+  emit('confirm', { downloadImagesAndVideo: downloadMediaChecked.value })
 }
 
 function handleClose() {
@@ -89,6 +104,21 @@ function handleClose() {
   color: #333;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.option-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #ebeef5;
+  font-size: 12px;
+  color: #606266;
+}
+
+.option-tip {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #909399;
+  line-height: 1.4;
 }
 
 </style>

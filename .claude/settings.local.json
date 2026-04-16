@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(printf '\\\\n--- extension ---\\\\n')",
+      "Bash(printf '\\\\n--- cjdb-wxt ---\\\\n')",
+      "Bash(python3:*)",
+      "Bash(npm run:*)",
+      "WebSearch",
+      "WebFetch(domain:open.feishu.cn)"
+    ]
+  }
+}

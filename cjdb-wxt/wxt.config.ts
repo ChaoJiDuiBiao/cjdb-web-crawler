@@ -1,10 +1,16 @@
 import { defineConfig } from 'wxt';
+import { readFileSync } from 'fs';
+
+const { version } = JSON.parse(readFileSync('./package.json', 'utf-8'))
 
 export default defineConfig({
   modules: ['@wxt-dev/module-vue'],
 
   // 输出到 output 而非 .output，便于 macOS 文件选择器直接选择（以点开头的文件夹会隐藏）
   outDir: 'output',
+
+  // 输出子目录：cjdb-v{version}，替代默认的 chrome-mv3
+  outDirTemplate: `抄级对标数据采集器-v${version}`,
 
   // 开发时浏览器启动配置（可被项目根目录的 web-ext.config.ts 覆盖）
   webExt: {
@@ -17,9 +23,26 @@ export default defineConfig({
   manifest: {
     // 固定扩展 ID，避免路径变更导致 storage 丢失
     key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwHhl57Hg2u291PVeL6X1GTJgUjsul5WeQaVER4vHKVTUnraQ7I2PI8rPCo0TsRJTNix7ikHTiaIBGG3PGtzp5jy0q3FbqCleMRFka4Daywk3dDHHXcBr/Jkp4RxOsJumq4haM+1yPhMZjTmT99K06sXWcfuRcIW4HqCEYNtsMWllF/7XtpKWF97GmfYz0AorXZKPtdswipMloRmYNYHpft8htS3SIc8J9/tjlsQHp6G+nyYgLw1X1kIoCSwvlRC/aMGqlei/sTdZWvSecq5XidaDDb7fAOJGQFfE6V+LsKCRntY0uwa722JVd0ZHQFtCOF8QKWiGDJRgcAk8k0ozSQIDAQAB',
-    name: 'CJDB 数据抓取',
-    description: '小红书、公众号、飞书文档采集工具',
-    permissions: ['storage', 'activeTab'],
+    name: '抄级对标·数据采集器',
+    short_name: '抄级对标',
+    icons: {
+      16: 'icon/16.png',
+      32: 'icon/32.png',
+      48: 'icon/48.png',
+      128: 'icon/128.png'
+    },
+    action: {
+      default_icon: {
+        16: 'icon/16.png',
+        32: 'icon/32.png',
+        48: 'icon/48.png',
+        128: 'icon/128.png'
+      }
+    },
+    description:
+      '抄级对标官方采集扩展：支持小红书笔记与评论、微信公众号、飞书文档等内容采集，并可同步至 Notion、本地存储等。',
+    // scripting：小红书 noteDetail 在 window.__INITIAL_STATE__，bridge 无响应时用 executeScript(MAIN) 兜底
+    permissions: ['storage', 'activeTab', 'scripting'],
     // content.css 需可被 Shadow DOM 内 link 加载，用于样式隔离
     web_accessible_resources: [
       {

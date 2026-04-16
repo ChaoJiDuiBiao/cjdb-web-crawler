@@ -30,7 +30,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
-  (e: 'confirm', value: Record<string, never>): void
+  (e: 'confirm', value: { downloadImagesAndVideo: boolean }): void
   (e: 'close'): void
 }>()
 
@@ -58,7 +58,7 @@ const previewText = computed(() => {
 })
 
 function handleConfirm() {
-  emit('confirm', {})
+  emit('confirm', { downloadImagesAndVideo: true })
 }
 
 function handleClose() {
@@ -83,5 +83,6 @@ function handleClose() {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
 
 </style>
