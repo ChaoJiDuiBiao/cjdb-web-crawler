@@ -1,0 +1,201 @@
+{
+    "69d77cdb0000000023023586": {
+      "note": {
+        "video": {
+          "media": {
+            "videoId": 137878178744123470,
+            "video": {
+              "drmType": 0,
+              "streamTypes": [
+                114,
+                259,
+                115,
+                108,
+                109
+              ],
+              "bizName": 110,
+              "bizId": "281993382946813318",
+              "duration": 440,
+              "md5": "94dd5b29375bf303302e782e55e473f6",
+              "hdrType": 0
+            },
+            "stream": {
+              "av1": [],
+              "h264": [
+                {
+                  "ssim": 0,
+                  "duration": 439423,
+                  "audioChannels": 2,
+                  "vmaf": -1,
+                  "masterUrl": "http://sns-video-qc.xhscdn.com/stream/1/110/259/01e9d7791a52404b010370039d71c2f366_259.mp4?sign=1d5dbb14b944e31f7c44af7ff75c18ad&t=69e3a68d",
+                  "backupUrls": [
+                    "http://sns-bak-v6.xhscdn.com/stream/1/110/259/01e9d7791a52404b010370039d71c2f366_259.mp4"
+                  ],
+                  "hdrType": 0,
+                  "weight": 62,
+                  "fps": 30,
+                  "size": 35671590,
+                  "format": "mp4",
+                  "volume": 0,
+                  "audioCodec": "aac",
+                  "psnr": 0,
+                  "height": 720,
+                  "videoBitrate": 579123,
+                  "streamType": 259,
+                  "defaultStream": 0,
+                  "width": 1280,
+                  "videoCodec": "h264",
+                  "videoDuration": 439400,
+                  "audioBitrate": 64018,
+                  "streamDesc": "WM_X264_MP4_web",
+                  "avgBitrate": 649425,
+                  "audioDuration": 439422,
+                  "rotate": 0,
+                  "qualityType": "HD"
+                }
+              ],
+              "h265": [
+                {
+                  "streamType": 114,
+                  "audioDuration": 439422,
+                  "size": 28926404,
+                  "audioBitrate": 128000,
+                  "rotate": 0,
+                  "masterUrl": "http://sns-video-qc.xhscdn.com/stream/1/110/114/01e9d7791a52404b010370019d71c778ed_114.mp4?sign=359611647d524d724c09f2407cdea4f6&t=69e3a68d",
+                  "weight": 62,
+                  "qualityType": "HD",
+                  "psnr": 42.939998626708984,
+                  "volume": 0,
+                  "hdrType": 0,
+                  "vmaf": -1,
+                  "ssim": 0,
+                  "defaultStream": 0,
+                  "height": 720,
+                  "videoBitrate": 392229,
+                  "audioCodec": "aac",
+                  "audioChannels": 2,
+                  "format": "mp4",
+                  "fps": 30,
+                  "videoCodec": "hevc",
+                  "backupUrls": [
+                    "http://sns-bak-v6.xhscdn.com/stream/1/110/114/01e9d7791a52404b010370019d71c778ed_114.mp4"
+                  ],
+                  "streamDesc": "X265_MP4_WEB_114",
+                  "width": 1280,
+                  "duration": 439423,
+                  "avgBitrate": 526625,
+                  "videoDuration": 439400,
+                  "resolution": 2
+                },
+                {
+                  "audioDuration": 439422,
+                  "streamType": 115,
+                  "defaultStream": 0,
+                  "size": 49857815,
+                  "avgBitrate": 907696,
+                  "rotate": 0,
+                  "masterUrl": "http://sns-video-qc.xhscdn.com/stream/1/110/115/01e9d7791a52404b010370019d71c62713_115.mp4?sign=15aa571461bbd4a95d5332a275412e47&t=69e3a68d",
+                  "hdrType": 0,
+                  "videoBitrate": 773320,
+                  "videoDuration": 439400,
+                  "duration": 439423,
+                  "fps": 29,
+                  "audioBitrate": 128000,
+                  "backupUrls": [
+                    "http://sns-bak-v6.xhscdn.com/stream/1/110/115/01e9d7791a52404b010370019d71c62713_115.mp4"
+                  ],
+                  "vmaf": -1,
+                  "psnr": 0,
+                  "weight": 70,
+                  "width": 1920,
+                  "height": 1080,
+                  "audioCodec": "aac",
+                  "audioChannels": 2,
+                  "format": "mp4",
+                  "videoCodec": "hevc",
+                  "qualityType": "HD",
+                  "ssim": 0,
+                  "streamDesc": "X265_MP4_WEB_115",
+                  "volume": 0,
+                  "resolution": 3
+                },
+                {
+                  "videoCodec": "hevc",
+                  "audioCodec": "aac",
+                  "defaultStream": 0,
+                  "width": 2560,
+                  "audioBitrate": 128037,
+                  "audioDuration": 439424,
+                  "masterUrl": "http://sns-video-qc.xhscdn.com/stream/1/110/108/01e9d7791a52404b010370019d71fc9e09_108.mp4?sign=691ac7f110f91c325dbd44191a58875f&t=69e3a68d",
+                  "ssim": 0,
+                  "duration": 439424,
+                  "videoBitrate": 1608417,
+                  "weight": 70,
+                  "qualityType": "HD",
+                  "format": "mp4",
+                  "avgBitrate": 1742783,
+                  "audioChannels": 2,
+                  "rotate": 0,
+                  "vmaf": -1,
+                  "streamType": 108,
+                  "streamDesc": "X265_MP4_WEB_108",
+                  "fps": 30,
+                  "videoDuration": 439400,
+                  "backupUrls": [
+                    "http://sns-bak-v6.xhscdn.com/stream/1/110/108/01e9d7791a52404b010370019d71fc9e09_108.mp4"
+                  ],
+                  "hdrType": 0,
+                  "height": 1440,
+                  "size": 95727627,
+                  "volume": 0,
+                  "psnr": 47.41999816894531,
+                  "resolution": 4,
+                  "isSpeedAllow": true,
+                  "isSystemSupport": true,
+                  "avgSpeed": -1,
+                  "isExpWeb2KH265": true
+                },
+                {
+                  "defaultStream": 0,
+                  "format": "mp4",
+                  "size": 158438014,
+                  "avgBitrate": 2884467,
+                  "backupUrls": [
+                    "http://sns-bak-v6.xhscdn.com/stream/1/110/109/01e9d7791a52404b010370019d72542a28_109.mp4"
+                  ],
+                  "weight": 80,
+                  "height": 2160,
+                  "volume": 0,
+                  "masterUrl": "http://sns-video-qc.xhscdn.com/stream/1/110/109/01e9d7791a52404b010370019d72542a28_109.mp4?sign=cbb4314ce4f854b38425596595fbad93&t=69e3a68d",
+                  "width": 3840,
+                  "audioDuration": 439424,
+                  "audioCodec": "aac",
+                  "audioChannels": 2,
+                  "streamType": 109,
+                  "fps": 30,
+                  "videoBitrate": 2750162,
+                  "videoDuration": 439400,
+                  "vmaf": -1,
+                  "videoCodec": "hevc",
+                  "audioBitrate": 128037,
+                  "psnr": 48.53799819946289,
+                  "ssim": 0,
+                  "streamDesc": "X265_MP4_WEB_109",
+                  "duration": 439424,
+                  "rotate": 0,
+                  "hdrType": 0,
+                  "qualityType": "HD",
+                  "resolution": 5,
+                  "isSpeedAllow": true,
+                  "isSystemSupport": true,
+                  "avgSpeed": -1,
+                  "isExpWeb4KH265": true
+                }
+              ],
+              "h266": []
+            }
+          }
+        }
+    }
+  }
+}

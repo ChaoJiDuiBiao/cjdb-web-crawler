@@ -1,6 +1,6 @@
 <template>
   <div class="popup">
-    <h2>CJDB 数据抓取</h2>
+    <h2>抄级对标·数据采集器</h2>
     <el-alert type="info" :closable="false">
       支持小红书、公众号、飞书文档页面采集
     </el-alert>

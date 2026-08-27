@@ -1,5 +1,6 @@
 import type { XiaohongshuNote, CommentExport } from '@/types'
-import { CollectionType } from '@/types'
+import { CollectionType, MessageTypes } from '@/types'
+import { browser } from 'wxt/browser'
 import { zh } from 'chrono-node'
 import { parseDateTime, formatDate } from '@/utils/dateTimeParse'
 
@@ -24,6 +25,56 @@ interface ReplyCommentData {
   content: string
   time: string
   likes: number
+}
+
+const CJDB_XHS_LOG = '[CJDB XHS]'
+/** 与 entrypoints/xiaohongshu-bridge.ts 中 MAIN world 的 postMessage 协议一致 */
+const CJDB_EXT_MSG_SOURCE = 'cjdb-ext'
+
+/** 从 __INITIAL_STATE__ 的 note.video 结构里解析可下载的 masterUrl（兼容仅 h264、仅一条 h265、多档码率等） */
+function extractVideoMasterUrlFromNoteVideo(videoInfo: unknown): string | null {
+  const vi = videoInfo as Record<string, any> | null | undefined
+  const stream = vi?.media?.stream
+  if (!stream || typeof stream !== 'object') return null
+
+  type Cand = { url: string; w: number; h: number; codec: string; idx: number; qualityType?: string }
+  const out: Cand[] = []
+  const pushArr = (arr: unknown, codec: string) => {
+    if (!Array.isArray(arr)) return
+    arr.forEach((item: any, idx: number) => {
+      const url = item?.masterUrl
+      if (typeof url !== 'string' || !url.startsWith('http')) return
+      const w = Number(item?.width) || 0
+      const h = Number(item?.height) || 0
+      out.push({
+        url,
+        w,
+        h,
+        codec,
+        idx,
+        qualityType: item?.qualityType
+      })
+    })
+  }
+  pushArr(stream.h264, 'h264')
+  pushArr(stream.h265, 'h265')
+  pushArr(stream.h266, 'h266')
+  pushArr(stream.av1, 'av1')
+
+  if (!out.length) return null
+
+  // 优先 1080p 附近（与旧逻辑 h265[1] 常见档位一致）；否则取最高像素；同分辨率优先 h264（兼容性好）
+  const prefer1080 = out.filter(c => c.h >= 1000 && c.h <= 1200)
+  const pool = prefer1080.length ? prefer1080 : out
+  pool.sort((a, b) => {
+    const dp = b.w * b.h - a.w * a.h
+    if (dp !== 0) return dp
+    if (a.codec === 'h264' && b.codec !== 'h264') return -1
+    if (b.codec === 'h264' && a.codec !== 'h264') return 1
+    return 0
+  })
+  const chosen = pool[0]
+  return chosen?.url || null
 }
 
 export class XiaohongshuNoteCrawler {
@@ -73,8 +124,88 @@ export class XiaohongshuNoteCrawler {
     const url = this.getCurrentNoteUrl()
     const ctx = this.getNoteContext()
     const noteId = url.match(/\/explore\/([\w-]+)/)?.[1] || ''
-    const state = (window as any).__INITIAL_STATE__
-    const noteData = state?.note?.noteDetailMap ? Object.values(state.note.noteDetailMap)[0] as any : null
+
+    // 1）优先：xiaohongshu-bridge（MAIN）通过 CustomEvent + postMessage 回传（同页、无额权限）
+    // 2）兜底：background + scripting.executeScript(MAIN)（不依赖跨 world 事件是否送达，用于取 video.masterUrl 等）
+    const BRIDGE_WAIT_MS = 1600
+    function readNoteDetailViaBridge(requestedId: string): Promise<any> {
+      return new Promise((resolve) => {
+        let settled = false
+        const finish = (data: any) => {
+          if (settled) return
+          settled = true
+          cleanup()
+          resolve(data)
+        }
+        const onDoc = (e: Event) => {
+          const detail = (e as CustomEvent).detail
+          if (detail?.noteId === requestedId) finish(detail.noteData)
+        }
+        const onWin = (e: MessageEvent) => {
+          const d = e.data
+          if (!d || typeof d !== 'object') return
+          if (d.source !== CJDB_EXT_MSG_SOURCE || d.type !== 'cjdb-note-detail-response') return
+          if (d.noteId !== requestedId) return
+          finish(d.noteData)
+        }
+        const cleanup = () => {
+          document.removeEventListener('cjdb-note-detail-response', onDoc)
+          window.removeEventListener('message', onWin)
+          if (timer) clearTimeout(timer)
+        }
+        document.addEventListener('cjdb-note-detail-response', onDoc)
+        window.addEventListener('message', onWin)
+        const timer = setTimeout(() => {
+          if (settled) return
+          finish(null)
+        }, BRIDGE_WAIT_MS)
+        document.dispatchEvent(
+          new CustomEvent('cjdb-request-note-detail', { detail: { noteId: requestedId } })
+        )
+        try {
+          window.postMessage(
+            {
+              source: CJDB_EXT_MSG_SOURCE,
+              type: 'cjdb-request-note-detail',
+              noteId: requestedId
+            },
+            '*'
+          )
+        } catch (err) {
+          console.warn(CJDB_XHS_LOG, 'postMessage 请求 bridge 失败', err)
+        }
+      })
+    }
+
+    let noteData = await readNoteDetailViaBridge(noteId)
+    if (!noteData) {
+      try {
+        const r = (await browser.runtime.sendMessage({
+          type: MessageTypes.XhsNoteDetailMain,
+          payload: { noteId }
+        })) as { ok?: boolean; noteData?: any; error?: string; reason?: string; keys?: string[] }
+        if (r?.ok === true && r.noteData != null) {
+          noteData = r.noteData
+        } else if (r && !r.ok) {
+          console.warn(CJDB_XHS_LOG, 'executeScript(MAIN) 未取到 noteDetail', {
+            noteId,
+            reason: r.reason,
+            keys: r.keys,
+            error: r.error
+          })
+        }
+      } catch (err) {
+        console.warn(CJDB_XHS_LOG, 'executeScript(MAIN) 调用失败', err)
+      }
+    }
+    if (!noteData) {
+      console.warn(CJDB_XHS_LOG, '未取到 noteDetail（bridge 与 executeScript 均无数据）。调试：页面控制台选 top，搜 [CJDB XHS MAIN]。', {
+        noteId,
+        href: location.href
+      })
+    }
+    // noteDetailMap[id] 的结构是 { note: { video, time, tagList, user, ... } }
+    const noteDetail = noteData?.note || noteData
 
     const parseCount = (text: string): number => {
       const match = String(text || '').match(/(\d+\.?\d*)(k|w|万|千)?/i)
@@ -123,11 +254,11 @@ export class XiaohongshuNoteCrawler {
         publishLocation = remaining
       }
     }
-    if (!publishTimeStr && noteData?.time) {
-      publishTimeStr = formatDate(new Date(noteData.time))
+    if (!publishTimeStr && noteDetail?.time) {
+      publishTimeStr = formatDate(new Date(noteDetail.time))
     }
     if (!publishTimeStr) publishTimeStr = formatDate(new Date())
-    if (!publishLocation && noteData?.location) publishLocation = noteData.location || ''
+    if (!publishLocation && noteDetail?.location) publishLocation = noteDetail.location || ''
 
     // 正文
     const contentEl = ctx.querySelector('#detail-desc') as HTMLElement
@@ -149,6 +280,27 @@ export class XiaohongshuNoteCrawler {
     const coverUrl = imageUrlList[0] || null
     const imageUrls = imageUrlList.length > 0 ? imageUrlList.join(',') : null
 
+    // 视频（STATE 经桥接；无 STATE 时走 DOM）
+    let videoUrl: string | null = null
+    const videoInfo = noteDetail?.video as any
+    if (videoInfo) {
+      videoUrl = extractVideoMasterUrlFromNoteVideo(videoInfo)
+    }
+
+    if (!videoUrl) {
+      // DOM fallback：不限 ctx 范围，xg-player 可能挂载在 ctx 外部
+      const videoEl = (
+        document.querySelector('xg-video video') ||
+        document.querySelector('.xg-video-container video') ||
+        document.querySelector('video')
+      ) as HTMLVideoElement | null
+      // currentSrc 优先（HLS 流实际播放地址），src 次之，source 兜底
+      const rawSrc = videoEl?.currentSrc || videoEl?.src || videoEl?.querySelector('source')?.getAttribute('src') || null
+      // 过滤掉 blob: 和空串（动态加载尚未就绪时的无效值）
+      if (rawSrc && !rawSrc.startsWith('blob:')) videoUrl = rawSrc
+    }
+    const mediaType: 'image' | 'video' | undefined = videoUrl ? 'video' : (imageUrlList.length > 0 ? 'image' : undefined)
+
     // 标签
     const tags = new Set<string>()
     const detailDesc = ctx.querySelector('#detail-desc')
@@ -159,8 +311,8 @@ export class XiaohongshuNoteCrawler {
         if (text && text.length < 50) tags.add(text)
       })
     }
-    if (tags.size === 0 && noteData?.tagList) {
-      noteData.tagList.forEach((tag: any) => {
+    if (tags.size === 0 && noteDetail?.tagList) {
+      noteDetail.tagList.forEach((tag: any) => {
         const t = (tag?.name || '').replace(/^#+/, '').trim()
         if (t && t.length < 50) tags.add(t)
       })
@@ -176,7 +328,7 @@ export class XiaohongshuNoteCrawler {
           if (n > 0) return n
         }
       }
-      const v = noteData?.interactInfo?.[stateKey]
+      const v = noteDetail?.interactInfo?.[stateKey]
       if (v != null) return parseInt(String(v), 10) || 0
       return 0
     }
@@ -191,19 +343,19 @@ export class XiaohongshuNoteCrawler {
     if (followerEl) authorFansCount = parseCount(followerEl.textContent || '')
     const likesEl = ctx.querySelector('.author-info .likes, .user-info .likes, [class*="like"]')
     if (likesEl) authorLikes = parseCount(likesEl.textContent || '')
-    if (!authorFansCount && noteData?.user?.fansCount) {
-      authorFansCount = parseInt(String(noteData.user.fansCount), 10) || 0
+    if (!authorFansCount && noteDetail?.user?.fansCount) {
+      authorFansCount = parseInt(String(noteDetail.user.fansCount), 10) || 0
     }
-    if (!authorLikes && noteData?.user?.likedCount) {
-      authorLikes = parseInt(String(noteData.user.likedCount), 10) || 0
+    if (!authorLikes && noteDetail?.user?.likedCount) {
+      authorLikes = parseInt(String(noteDetail.user.likedCount), 10) || 0
     }
 
     let authorFollowing = 0
-    if (noteData?.user?.followCount) {
-      authorFollowing = parseInt(String(noteData.user.followCount), 10) || 0
+    if (noteDetail?.user?.followCount) {
+      authorFollowing = parseInt(String(noteDetail.user.followCount), 10) || 0
     }
 
-    const user = noteData?.user
+    const user = noteDetail?.user
     let authorUserId = user?.userId || user?.id || ''
     let authorNickname = user?.nickname || user?.nick_name || ''
     let authorAvatarUrl = user?.avatar || user?.image || ''
@@ -227,7 +379,7 @@ export class XiaohongshuNoteCrawler {
 
     showTip('数据采集完成')
 
-    return {
+    const data: XiaohongshuNote = {
       url,
       noteId,
       title,
@@ -245,11 +397,21 @@ export class XiaohongshuNoteCrawler {
       authorFollowing,
       coverUrl,
       imageUrls,
+      videoUrl: videoUrl ?? undefined,
+      mediaType,
       tags: Array.from(tags),
       commentList,
       source: 'dom',
       crawledAt: new Date().toISOString()
     }
+
+    // 有有效视频直链时：DOM 封面/轮播图不可靠，返回前清洗掉
+    if (data.videoUrl) {
+      data.coverUrl = null
+      data.imageUrls = null
+    }
+
+    return data
   }
 
   private getCurrentNoteUrl(): string {

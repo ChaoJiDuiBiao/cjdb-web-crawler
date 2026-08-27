@@ -10,23 +10,32 @@ import { browser } from 'wxt/browser'
  * @param storeCfg - 可选，传入时优先使用，否则 background 从 storage 读取
  * @param fromTabId - 可选，调用方所在 tab，供 showPanelTip 使用
  */
-export function storeCrawlData(
+export async function storeCrawlData(
   collectionType: CollectionType,
   data: any,
   storeCfg?: StoreConfig,
   fromTabId?: number
 ): Promise<SaveResult | SaveResult[]> {
-  console.log('[CJDB] storeCrawlData Dispatch:', collectionType, !!storeCfg, fromTabId)
+  let tabId = fromTabId
+  if (tabId == null) {
+    try {
+      const t = await browser.tabs.getCurrent()
+      tabId = t?.id
+    } catch {
+      /* 非浏览器 tab 上下文时无法定向推送面板进度 */
+    }
+  }
+  console.log('[CJDB] storeCrawlData Dispatch:', collectionType, !!storeCfg, tabId)
   return browser.runtime.sendMessage({
     type: MessageTypes.StoreCrawlData,
-    payload: { collectionType, data, storeCfg, fromTabId }
+    payload: { collectionType, data, storeCfg, fromTabId: tabId }
   })
 }
 
 /**
  * Store - 数据存储统一入口
  * 职责：
- * 1. 管理存储适配器（notion, feishu, local）
+ * 1. 管理存储适配器（notion, feishu, local → LocalFileStore）
  * 2. 根据配置类型分发到对应的适配器
  * 3. 返回统一格式的结果
  */
@@ -35,7 +44,7 @@ export class Store {
 
   /**
    * 注册存储适配器
-   * @param name - 'notion' | 'feishu' | 'local'
+   * @param name - 'notion' | 'feishu' | 'local'（适配器实现为 LocalFileStore）
    * @param adapter - 实现 StoreAdapter 接口的适配器
    */
   register(name: string, adapter: StoreAdapter) {

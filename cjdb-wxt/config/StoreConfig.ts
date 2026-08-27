@@ -56,7 +56,9 @@ function ensureStoresByType(val: unknown): Record<string, Store[]> {
 export interface StoreTypeField {
   key: string
   label: string
-  inputType?: 'text' | 'password'
+  inputType?: 'text' | 'password' | 'select'
+  options?: { value: string; label: string }[]
+  defaultValue?: string
 }
 
 export const STORE_SCHEMA: Record<
@@ -64,10 +66,25 @@ export const STORE_SCHEMA: Record<
   { label: string; fields: StoreTypeField[]; getDisplayLabel: (s: Store) => string; disabled?: boolean }
 > = {
   [StoreType.Local]: {
-    label: '本地存储（未实现）',
-    fields: [],
-    getDisplayLabel: () => '本地存储（未实现）',
-    disabled: true
+    label: '本地存储',
+    fields: [
+      {
+        key: 'exportFormat',
+        label: '导出格式',
+        inputType: 'select',
+        defaultValue: '',
+        options: [
+          { value: 'csv', label: 'CSV（Excel 可直接打开）' },
+          { value: 'markdown', label: 'Markdown（可文本编辑器打开）' }
+        ]
+      }
+    ],
+    getDisplayLabel: (s) => {
+      const fmt = (s.config as any)?.exportFormat
+      if (fmt === 'csv') return '本地存储 \\ CSV'
+      if (fmt === 'markdown') return '本地存储 \\ Markdown'
+      return '本地存储'
+    }
   },
   [StoreType.Notion]: {
     label: 'Notion',
@@ -86,12 +103,12 @@ export const STORE_SCHEMA: Record<
     fields: [
       { key: 'appId', label: 'App ID', inputType: 'text' },
       { key: 'appSecret', label: 'App Secret', inputType: 'password' },
-      { key: 'appToken', label: 'App Token', inputType: 'text' },
-      { key: 'tableId', label: 'Table ID', inputType: 'text' }
+      { key: 'wikiUrl', label: '多维表格链接（切换到目标数据表后复制链接，需含 ?table= 参数）', inputType: 'text' }
     ],
     getDisplayLabel: (s) => {
       const name = (s.config as any)?.name?.trim()
-      const fallback = (s.config as any)?.tableId || '...'
+      const wikiUrl = String((s.config as any)?.wikiUrl ?? '')
+      const fallback = wikiUrl ? wikiUrl.slice(0, 30) + '…' : '...'
       return name ? `飞书 \\ ${name}` : `飞书 \\ ${fallback}`
     }
   }
@@ -120,7 +137,6 @@ export async function initStoreConfig() {
             .map((item: any, i: number) => {
               if (!item || typeof item !== 'object') return null
               const { type, ...config } = item
-              if (type === StoreType.Local || type === 'local') return null
               return {
                 type: type as StoreType,
                 is_selected: i === idx,
@@ -218,7 +234,7 @@ async function addStore(collectionType: CollectionType, store: Partial<Store>) {
     s.is_selected = false
   })
   list.push({
-    type: (store.type ?? StoreType.Notion) as StoreType,
+    type: (store.type ?? StoreType.Local) as StoreType,
     is_selected: true,
     config: store.config ?? {}
   })

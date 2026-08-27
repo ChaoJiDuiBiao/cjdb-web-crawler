@@ -1,16 +1,19 @@
 <template>
   <div class="cjdb-panel">
-    <!-- 存储配置按钮 -->
-    <el-button
-      circle
-      size="small"
-      :icon="Setting"
-      @click="showStoreSelector = !showStoreSelector"
-      class="store-btn">
-    </el-button>
+    <!-- 存储配置入口：hover 展示存储源列表 -->
+    <div
+      class="store-entry"
+      @mouseenter="showStoreSelector = true"
+      @mouseleave="showStoreSelector = false">
 
-    <!-- 存储源选择下拉 -->
-    <div v-if="showStoreSelector" class="store-selector">
+      <!-- 触发按钮 -->
+      <div class="store-trigger" @click="showStoreSelector = !showStoreSelector">
+        <el-icon class="store-trigger-icon"><Setting /></el-icon>
+        <span v-if="currentStoreName" class="store-trigger-label">{{ currentStoreName }}</span>
+      </div>
+
+      <!-- 存储源选择下拉 -->
+      <div v-show="showStoreSelector" class="store-selector">
       <div
         v-for="(store, index) in storesList"
         :key="index"
@@ -44,6 +47,7 @@
         + 添加存储源
       </div>
     </div>
+    </div><!-- /store-entry -->
 
 
     <!-- 公众号：当前文章 | 历史文章 -->
@@ -62,7 +66,7 @@
       </span>
     </div>
 
-    <!-- 采集按钮：采集大字 + 下方小字类型 -->
+    <!-- 采集按钮：类型大字 + 下方小字"采集" -->
     <el-button
       :type="collecting ? 'warning' : 'primary'"
       :loading="collecting"
@@ -74,8 +78,8 @@
       </template>
       <template v-else>
         <div class="collect-btn-inner">
-          <div class="collect-btn-main">采集</div>
           <div class="collect-btn-type">{{ collectTypeText }}</div>
+          <div class="collect-btn-main">采集</div>
         </div>
       </template>
     </el-button>
@@ -97,11 +101,12 @@
             :disabled="editingStoreIdx !== null"
             @change="handleTypeChange">
             <el-option
-              v-for="storeType in [StoreType.Local, StoreType.Notion, StoreType.Feishu]"
+              v-for="storeType in [StoreType.Local, StoreType.Feishu, StoreType.Notion]"
               :key="storeType"
               :label="STORE_SCHEMA[storeType]?.label ?? storeType"
               :value="storeType"
-              :disabled="STORE_SCHEMA[storeType]?.disabled" />
+              :disabled="STORE_SCHEMA[storeType]?.disabled"
+            />
           </el-select>
         </el-form-item>
 
@@ -109,7 +114,19 @@
           v-for="field in STORE_SCHEMA[configForm.type as StoreType]?.fields ?? []"
           :key="field.key"
           :label="field.label">
+          <el-select
+            v-if="field.inputType === 'select'"
+            v-model="configForm[field.key]"
+            style="width: 100%"
+            :teleported="false">
+            <el-option
+              v-for="opt in field.options ?? []"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value" />
+          </el-select>
           <el-input
+            v-else
             v-model="configForm[field.key]"
             :type="field.inputType || 'text'" />
         </el-form-item>
@@ -325,6 +342,7 @@ import { Setting, EditPen, Delete, MoreFilled, ArrowDown } from '@element-plus/i
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeCrawlData } from '@/stores/Store'
 import { storeConfig, STORE_SCHEMA } from '@/config/StoreConfig'
+import { exportXHSFeed, exportXHSAccount, exportWechatArticle, exportFeishuDoc, exportXHSNoteDetail } from '@/utils/exportFile'
 import { getDajialaApiKey, setDajialaApiKey, augmentWechatArticlesWithApiData, augmentWechatArticlesWithPrincipalInfo, fetchPrincipalInfo } from '@/utils/dajialaApi'
 import { _fetch } from '@/utils/_fetch'
 import { parseNotionDatabaseId } from '@/utils/notion'
@@ -366,7 +384,10 @@ const previewCollectionType = ref<CollectionType | ''>('')
 const configForm = ref<{ type: StoreType; [k: string]: unknown }>({ type: StoreType.Notion })
 
 type PreviewConfirmOptions = {
+  /** 公众号文章：是否下载图片到 Notion */
   downloadImages?: boolean
+  /** 小红书三种采集：是否下载并上传图片/视频（或封面、头像） */
+  downloadImagesAndVideo?: boolean
   extraData?: boolean
   extraPrincipalInfo?: boolean
 }
@@ -384,6 +405,12 @@ const currentCollectionType = computed(
 // 按 CollectionType 动态筛选的 store 列表
 const storesList = computed(() => storeConfig.getStoresByCollectionType(currentCollectionType.value))
 const currentStoreIdx = computed(() => storeConfig.getCurrentStoreIndex(currentCollectionType.value))
+
+// 当前选中存储源的显示名称（用于 hover 时展示）
+const currentStoreName = computed(() => {
+  const store = storesList.value.find((s) => s.is_selected)
+  return store ? storeConfig.getStoreLabel(store as Store) : ''
+})
 
 // 采集中/保存中时的按钮文字
 const collectingPhaseText = computed(() =>
@@ -947,15 +974,20 @@ async function selectStore(index: number) {
   showStoreSelector.value = false
 }
 
-// 类型变化时重置表单
+// 类型变化时重置表单，并预填各字段默认值
 function handleTypeChange() {
-  configForm.value = { type: configForm.value.type }
+  const type = configForm.value.type
+  const defaults: Record<string, unknown> = { type }
+  for (const field of STORE_SCHEMA[type as StoreType]?.fields ?? []) {
+    defaults[field.key] = field.defaultValue ?? ''
+  }
+  configForm.value = defaults as { type: StoreType; [k: string]: unknown }
 }
 
 // 打开添加配置弹窗（与小红书完全相同的逻辑）
 function openAddConfig() {
   editingStoreIdx.value = null
-  configForm.value = { type: StoreType.Notion }
+  configForm.value = { type: StoreType.Local }
   showStoreSelector.value = false
   showConfig.value = true
 }
@@ -964,7 +996,7 @@ function openAddConfig() {
 function closeConfig() {
   showConfig.value = false
   editingStoreIdx.value = null
-  configForm.value = { type: StoreType.Notion }
+  configForm.value = { type: StoreType.Local }
 }
 
 // 打开编辑配置弹窗（与小红书完全相同的逻辑）
@@ -1015,8 +1047,8 @@ function skipRemark() {
 // 添加/编辑存储源
 async function saveConfig() {
   const { type, ...config } = configForm.value
-  if (type === StoreType.Local || STORE_SCHEMA[type as StoreType]?.disabled) {
-    ElMessage.warning('本地存储暂未实现')
+  if (STORE_SCHEMA[type as StoreType]?.disabled) {
+    ElMessage.warning('该存储类型暂不可用')
     return
   }
   if (type === StoreType.Notion) {
@@ -1027,6 +1059,41 @@ async function saveConfig() {
     }
     ;(config as Record<string, unknown>).databaseId = notionDbId
   }
+  if (type === StoreType.Feishu) {
+    const feishuCfg = config as Record<string, unknown>
+    if (!String(feishuCfg.appId ?? '').trim()) {
+      ElMessage.warning('请填写飞书 App ID')
+      return
+    }
+    if (!String(feishuCfg.appSecret ?? '').trim()) {
+      ElMessage.warning('请填写飞书 App Secret')
+      return
+    }
+    const rawUrl = String(feishuCfg.wikiUrl ?? '').trim()
+    if (!rawUrl) {
+      ElMessage.warning('请填写飞书多维表格链接')
+      return
+    }
+    let parsedUrl: URL
+    try {
+      parsedUrl = new URL(rawUrl)
+    } catch {
+      ElMessage.warning('飞书链接格式不正确，请直接复制浏览器地址栏中的完整链接')
+      return
+    }
+    if (!parsedUrl.hostname.includes('feishu.cn') && !parsedUrl.hostname.includes('larkoffice.com') && !parsedUrl.hostname.includes('larksuite.com')) {
+      ElMessage.warning('链接看起来不是飞书地址，请确认后重新粘贴')
+      return
+    }
+    if (!parsedUrl.pathname.includes('/wiki/')) {
+      ElMessage.warning('请复制飞书 Wiki 页面的链接（路径中需包含 /wiki/）')
+      return
+    }
+    if (!parsedUrl.searchParams.get('table')) {
+      ElMessage.warning('链接中缺少目标数据表参数（?table=xxx）。请在飞书中点击目标数据表后，再复制地址栏链接')
+      return
+    }
+  }
   if (!isStoreConfigured({ type: type as string, ...config } as any)) {
     ElMessage.warning('请先填写完整配置信息')
     return
@@ -1036,13 +1103,13 @@ async function saveConfig() {
   ;(config as Record<string, unknown>).name = name?.trim() || ''
   if (isEdit && editingStoreIdx.value !== null) {
     await storeConfig.updateStore(currentCollectionType.value, editingStoreIdx.value, {
-      type: type ?? StoreType.Notion,
+      type: type ?? StoreType.Local,
       config: config as Record<string, unknown>
     })
     ElMessage.success('已更新')
   } else {
     await storeConfig.addStore(currentCollectionType.value, {
-      type: type ?? StoreType.Notion,
+      type: type ?? StoreType.Local,
       config: config as Record<string, unknown>
     })
     ElMessage.success('配置已保存')
@@ -1069,10 +1136,19 @@ async function removeStoreAt(index: number) {
 }
 
 // 校验当前存储源是否已配置
-function isStoreConfigured(store: { type: string; token?: string; databaseId?: string; appId?: string; appSecret?: string; appToken?: string; tableId?: string }): boolean {
-  if (store.type === 'local') return false // 本地存储未实现
+function isStoreConfigured(store: { type: string; token?: string; databaseId?: string; appId?: string; appSecret?: string; wikiUrl?: string; appToken?: string; tableId?: string }): boolean {
+  if (store.type === 'local') return true // 本地存储无需填写配置，直接可用
   if (store.type === 'notion') return !!(store.token?.trim() && parseNotionDatabaseId(store.databaseId))
-  if (store.type === 'feishu') return !!(store.appId?.trim() && store.appSecret?.trim() && store.appToken?.trim() && store.tableId?.trim())
+  if (store.type === 'feishu') {
+    return !!(
+      store.appId?.trim() &&
+      store.appSecret?.trim() &&
+      (
+        store.wikiUrl?.trim() ||
+        (store.appToken?.trim() && store.tableId?.trim())
+      )
+    )
+  }
   return false
 }
 
@@ -1154,22 +1230,48 @@ async function confirmAndSave(options: PreviewConfirmOptions = {}) {
     if (options.extraData) {
       dataToSave = await augmentWechatArticlesWithApiData(dataToSave, (msg) => tipsDisplay(msg))
     }
+    const shouldDl = options.downloadImages !== false
+    if (Array.isArray(dataToSave)) {
+      dataToSave = dataToSave.map((item: any) => ({ ...item, downloadImages: shouldDl }))
+    } else if (dataToSave && typeof dataToSave === 'object') {
+      dataToSave = { ...dataToSave, downloadImages: shouldDl }
+    }
   } else {
     dataToSave = data
   }
 
-  const shouldDownloadImages = options.downloadImages !== false
-  const appendImageOption = (item: any) => ({
-    ...(item || {}),
-    downloadImages: shouldDownloadImages
-  })
-  if (Array.isArray(dataToSave)) {
-    dataToSave = dataToSave.map(appendImageOption)
-  } else if (dataToSave && typeof dataToSave === 'object') {
-    dataToSave = appendImageOption(dataToSave)
+  if (
+    collectionType === CollectionType.XHSNoteDetail ||
+    collectionType === CollectionType.XHSFeed ||
+    collectionType === CollectionType.XHSAccount
+  ) {
+    const shouldMedia =
+      collectionType === CollectionType.XHSFeed
+        ? options.downloadImagesAndVideo === true
+        : options.downloadImagesAndVideo !== false
+    const injectMeta = (item: any) => ({
+      ...item,
+      _metaData: { ...(item?._metaData || {}), downloadImagesAndVideo: shouldMedia }
+    })
+    if (Array.isArray(dataToSave)) {
+      dataToSave = dataToSave.map(injectMeta)
+    } else if (dataToSave && typeof dataToSave === 'object') {
+      dataToSave = injectMeta(dataToSave)
+    }
   }
 
+  const isXhsFeed = collectionType === CollectionType.XHSFeed
+  const xhsFeedMediaOn =
+    isXhsFeed && Array.isArray(dataToSave)
+      ? (dataToSave[0] as any)?._metaData?.downloadImagesAndVideo === true
+      : isXhsFeed && dataToSave && typeof dataToSave === 'object'
+        ? (dataToSave as any)?._metaData?.downloadImagesAndVideo === true
+        : false
+
   try {
+    if (isXhsFeed) {
+      tipsDisplay(xhsFeedMediaOn ? '正在保存（含封面上传）…' : '正在保存（跳过封面上传）…')
+    }
     const result = await storeCrawlData(collectionType, dataToSave, storeCfg)
     console.log('[CJDB] confirmAndSave Result:', result)
 
@@ -1183,6 +1285,25 @@ async function confirmAndSave(options: PreviewConfirmOptions = {}) {
 
     showPreview.value = false
     clearTipMessage()
+
+    // 本地存储：按 exportFormat 触发文件下载（DOM 操作只能在 content script 侧执行）
+    for (const r of results) {
+      const res = r as any
+      if (res.exportFormat && res.exportData && res.exportType) {
+        const { exportType, exportData, exportFormat } = res
+        if (exportType === CollectionType.XHSNoteDetail) {
+          await exportXHSNoteDetail(exportData, exportFormat)
+        } else if (exportType === CollectionType.XHSFeed) {
+          exportXHSFeed(exportData, exportFormat)
+        } else if (exportType === CollectionType.XHSAccount) {
+          exportXHSAccount(exportData, exportFormat)
+        } else if (exportType === CollectionType.WechatArticle) {
+          exportWechatArticle(exportData, exportFormat)
+        } else if (exportType === CollectionType.FeishuDoc) {
+          exportFeishuDoc(exportData, exportFormat)
+        }
+      }
+    }
 
     const pageIds = results.filter((r) => r.pageId).map((r) => r.pageId as string)
     const pageIdSuffix =
@@ -1261,36 +1382,54 @@ onMounted(async () => {
   flex-direction: column;
   align-items: flex-end;
   gap: 12px;
+
+  // 默认 30% 透明，不干扰用户阅读；hover 整体面板恢复 100%
+  // tip-display 不在此列，保持全显（它是操作反馈，必须清晰可见）
+  .collect-btn,
+  .store-trigger,
+  .mode-selector {
+    opacity: 0.3;
+    transition: opacity 0.25s ease;
+  }
+
+  &:hover {
+    .collect-btn,
+    .store-trigger,
+    .mode-selector {
+      opacity: 1;
+    }
+  }
 }
 
 .mode-selector {
   display: flex;
   gap: 4px;
   padding: 4px;
-  background: rgba(255, 255, 255, 0.9);
+  background: #101111;
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset;
 }
 .mode-item {
   padding: 6px 12px;
   font-size: 12px;
   border-radius: 6px;
   cursor: pointer;
-  color: #606266;
-  transition: all 0.2s;
+  color: #9c9c9d;
+  transition: opacity 0.2s, color 0.2s, background 0.2s;
   &:hover {
-    color: #409eff;
+    color: #f9f9f9;
   }
   &.active {
-    background: #ecf5ff;
-    color: #409eff;
+    background: rgba(85, 179, 255, 0.15);
+    color: #55b3ff;
     font-weight: 500;
   }
   &.disabled {
-    color: #c0c4cc;
+    color: #434345;
     cursor: not-allowed;
     &:hover {
-      color: #c0c4cc;
+      color: #434345;
     }
   }
 }
@@ -1333,9 +1472,11 @@ onMounted(async () => {
 
 .history-options {
   padding: 10px 12px;
-  background: #f9fafb;
+  background: #07080a;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
   font-size: 13px;
+  color: #9c9c9d;
 }
 
 .history-list-header {
@@ -1343,13 +1484,13 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   font-size: 13px;
-  color: #606266;
+  color: #9c9c9d;
 }
 
 .history-table-wrapper {
   max-height: 400px;
   overflow-y: auto;
-  border: 1px solid #ebeef5;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
 }
 
@@ -1357,18 +1498,19 @@ onMounted(async () => {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  color: #f9f9f9;
 
   thead {
     position: sticky;
     top: 0;
-    background: #f5f7fa;
+    background: #07080a;
     z-index: 1;
     th {
       padding: 10px 12px;
       font-weight: 500;
-      color: #606266;
+      color: #9c9c9d;
       text-align: left;
-      border-bottom: 1px solid #ebeef5;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     }
   }
 
@@ -1377,10 +1519,10 @@ onMounted(async () => {
       cursor: pointer;
       transition: background 0.2s;
       &:hover {
-        background: #f5f7fa;
+        background: rgba(255, 255, 255, 0.04);
       }
       &.checked {
-        background: #ecf5ff;
+        background: rgba(85, 179, 255, 0.1);
       }
       &.disabled {
         cursor: not-allowed;
@@ -1391,12 +1533,12 @@ onMounted(async () => {
       }
       &.failed {
         td {
-          background: #fef0f0;
+          background: rgba(255, 99, 99, 0.08);
         }
       }
       td {
         padding: 10px 12px;
-        border-bottom: 1px solid #ebeef5;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
       }
     }
   }
@@ -1407,7 +1549,7 @@ onMounted(async () => {
   width: 20px;
   text-align: center;
   font-weight: bold;
-  color: #409eff;
+  color: #55b3ff;
   display: inline-block;
 }
 
@@ -1425,7 +1567,7 @@ onMounted(async () => {
   max-width: 100%;
 
   &.failed {
-    color: #f56c6c;
+    color: #FF6363;
     font-weight: 500;
     cursor: help;
   }
@@ -1433,16 +1575,17 @@ onMounted(async () => {
 
 .history-date {
   font-size: 12px;
-  color: #909399;
+  color: #6a6b6c;
   white-space: nowrap;
 }
 
 .history-list {
   max-height: 320px;
   overflow-y: auto;
-  border: 1px solid #ebeef5;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
   padding: 4px;
+  background: #07080a;
 }
 .history-item {
   display: flex;
@@ -1452,23 +1595,78 @@ onMounted(async () => {
   border-radius: 4px;
   cursor: pointer;
   font-size: 13px;
-  &:hover { background: #f5f7fa; }
-  &.checked { background: #ecf5ff; }
+  color: #f9f9f9;
+  transition: background 0.2s;
+  &:hover { background: rgba(255, 255, 255, 0.04); }
+  &.checked { background: rgba(85, 179, 255, 0.1); }
 }
 
-.store-btn {
-  opacity: 0.7;
+.store-entry {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.store-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: #101111;
+  border-radius: 20px;
+  box-shadow: rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset,
+              rgba(255, 255, 255, 0.15) 0px 0px 0px 1px,
+              rgba(0, 0, 0, 0.35) 0px 3px 12px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  backdrop-filter: blur(12px);
+
   &:hover {
-    opacity: 1;
+    opacity: 0.7;
   }
 }
 
+.store-trigger-icon {
+  font-size: 22px;
+  color: #f9f9f9;
+  flex-shrink: 0;
+}
+
+.store-trigger-label {
+  font-size: 12px;
+  color: #9c9c9d;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1;
+}
+
 .store-selector {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
   padding: 8px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: #101111;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: rgba(0, 0, 0, 0.5) 0px 0px 0px 2px,
+              rgba(255, 255, 255, 0.08) 0px 0px 20px,
+              rgb(7, 8, 10) 0px 0px 0px 1px inset;
   min-width: 180px;
+  z-index: 10;
+
+  // 透明桥接区，填充 selector 与 trigger 之间的 8px 死区
+  // 防止鼠标经过间隙时触发 mouseleave 导致列表消失
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: -8px;
+    left: 0;
+    right: 0;
+    height: 8px;
+  }
 }
 
 .store-item {
@@ -1480,15 +1678,16 @@ onMounted(async () => {
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
+  color: #f9f9f9;
   transition: background 0.2s;
 
   &:hover {
-    background: #f5f5f5;
+    background: rgba(255, 255, 255, 0.05);
   }
 
   &.active {
-    background: #ecf5ff;
-    color: #409eff;
+    background: rgba(85, 179, 255, 0.15);
+    color: #55b3ff;
     font-weight: 500;
   }
 
@@ -1503,6 +1702,7 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #f9f9f9;
 }
 
 .store-item-menu {
@@ -1512,7 +1712,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #909399;
+  color: #6a6b6c;
   opacity: 0;
   transition: opacity 0.2s, color 0.2s;
   border-radius: 4px;
@@ -1524,21 +1724,21 @@ onMounted(async () => {
   }
 
   &:hover {
-    color: #606266;
-    background: rgba(0, 0, 0, 0.05);
+    color: #f9f9f9;
+    background: rgba(255, 255, 255, 0.08);
   }
 }
 
 .store-item-add {
   padding: 10px 12px;
   margin-top: 6px;
-  border-top: 1px solid #eee;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
   cursor: pointer;
   font-size: 13px;
-  color: #909399;
+  color: #6a6b6c;
 
   &:hover {
-    color: #409eff;
+    color: #55b3ff;
   }
 }
 
@@ -1549,7 +1749,17 @@ onMounted(async () => {
   border-radius: 50%;
   padding: 0;
   overflow: hidden;
-  transition: background-color 0.25s, border-color 0.25s;
+  transition: opacity 0.25s;
+
+  // Raycast dark surface override on el-button primary
+  background: #101111 !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  color: #f9f9f9 !important;
+  box-shadow: rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset,
+              rgba(255, 255, 255, 0.2) 0px 0px 0px 1px,
+              rgba(0, 0, 0, 0.45) 0px 6px 20px !important;
+
+  // 透明度由 .cjdb-panel 组级控制，不在此单独设 hover opacity
 
   :deep(.el-button__content) {
     display: flex;
@@ -1561,9 +1771,10 @@ onMounted(async () => {
   }
 
   &.collect-btn-busy {
-    background: linear-gradient(135deg, #e6a23c, #f0c14b) !important;
-    border-color: #e6a23c !important;
-    color: #fff !important;
+    background: linear-gradient(135deg, #e6a23c, #ffbc33) !important;
+    border-color: transparent !important;
+    color: #18191a !important;
+    box-shadow: rgba(255, 188, 51, 0.35) 0px 6px 20px !important;
   }
 
   .collect-btn-inner {
@@ -1571,30 +1782,34 @@ onMounted(async () => {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
-    margin-top: -2px;
+    gap: 2px;
     min-width: 0;
     max-width: 100%;
     overflow: hidden;
   }
 
-  .collect-btn-main {
-    flex-shrink: 0;
-    font-size: 24px;
-    font-weight: 600;
-    line-height: 1.1;
-    letter-spacing: 2px;
-  }
-
+  // 类型文字：现在是主角（大字）
   .collect-btn-type {
+    flex-shrink: 0;
     min-width: 0;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 12px;
+    font-size: 15px;
     font-weight: 600;
-    opacity: 0.95;
+    line-height: 1.2;
+    letter-spacing: 0.2px;
+  }
+
+  // "采集" 标签：现在是配角（小字，弱化）
+  .collect-btn-main {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 1px;
+    opacity: 0.5;
   }
 }
 
@@ -1612,16 +1827,20 @@ onMounted(async () => {
 
 .tip-display {
   padding: 10px 18px;
-  background: linear-gradient(135deg, rgba(64, 158, 255, 0.95), rgba(100, 180, 255, 0.95));
+  background: #101111;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 24px;
-  box-shadow: 0 4px 16px rgba(64, 158, 255, 0.3);
+  box-shadow: rgb(27, 28, 30) 0px 0px 0px 1px,
+              rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset,
+              rgba(0, 0, 0, 0.35) 0px 4px 16px;
   font-size: 13px;
-  color: #fff;
+  color: #f9f9f9;
   font-weight: 500;
   max-width: 280px;
   word-break: break-word;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(12px);
   transition: opacity 0.3s ease;
+  letter-spacing: 0.2px;
 }
 
 /* 透明度：最旧20%（上）、第二50%（中）、最新100%（下） */
@@ -1679,8 +1898,115 @@ onMounted(async () => {
   overflow: visible !important;
 }
 
+/* teleported=false 的下拉渲染在 dialog 内，需确保父容器不裁切 */
+.cjdb-config-dialog .el-select__popper {
+  z-index: 10 !important;
+}
+
 /* 数据库备注弹窗：层级高于配置弹窗，确保盖在前一个弹窗之上 */
 .el-overlay:has(.cjdb-remark-dialog) {
   z-index: 999999 !important;
+}
+
+/* Raycast 暗色主题：覆盖 el-dialog 样式
+ * 关键：el-dialog 的 class 属性直接挂在 .el-dialog 元素本身
+ * 所以用 .cjdb-config-dialog { } 而非 .cjdb-config-dialog .el-dialog { }
+ */
+.cjdb-config-dialog,
+.cjdb-remark-dialog {
+  /* 弹窗根元素（.el-dialog 本身） */
+  background: #101111 !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  box-shadow: rgba(0, 0, 0, 0.5) 0px 0px 0px 2px,
+              rgba(255, 255, 255, 0.06) 0px 0px 20px,
+              rgb(7, 8, 10) 0px 0px 0px 1px inset !important;
+
+  .el-dialog__header {
+    background: #101111;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding-bottom: 16px;
+  }
+
+  .el-dialog__title {
+    color: #f9f9f9 !important;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+  }
+
+  .el-dialog__headerbtn .el-dialog__close {
+    color: #6a6b6c !important;
+    &:hover { color: #f9f9f9 !important; }
+  }
+
+  .el-dialog__body {
+    background: #101111;
+    color: #f9f9f9;
+  }
+
+  .el-form-item__label {
+    color: #9c9c9d !important;
+    font-size: 13px;
+  }
+
+  .el-input__wrapper {
+    background: #07080a !important;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset !important;
+
+    &.is-focus {
+      box-shadow: 0 0 0 1px rgba(85, 179, 255, 0.5) inset !important;
+    }
+  }
+
+  .el-input__inner {
+    color: #f9f9f9 !important;
+    background: transparent !important;
+    &::placeholder { color: #434345 !important; }
+  }
+
+  .el-select__wrapper {
+    background: #07080a !important;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset !important;
+    color: #f9f9f9 !important;
+  }
+
+  /* select 已选中值的文字 */
+  .el-select__selected-item span,
+  .el-select__placeholder {
+    color: #f9f9f9 !important;
+  }
+
+  .el-dialog__footer {
+    background: #101111;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 16px;
+
+    .el-button {
+      background: rgba(255, 255, 255, 0.05) !important;
+      border-color: rgba(255, 255, 255, 0.1) !important;
+      color: #9c9c9d !important;
+      &:hover { color: #f9f9f9 !important; opacity: 0.8; }
+    }
+
+    .el-button--primary {
+      background: rgba(85, 179, 255, 0.15) !important;
+      border-color: rgba(85, 179, 255, 0.3) !important;
+      color: #55b3ff !important;
+      &:hover { opacity: 0.8; }
+    }
+  }
+}
+
+/* 存储类型 select 下拉 popper 暗色主题（teleported 到 body 外，需独立选择器） */
+.cjdb-store-select-popper {
+  background: #101111 !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  box-shadow: rgba(0, 0, 0, 0.4) 0px 4px 16px !important;
+
+  .el-select-dropdown__item {
+    color: #9c9c9d;
+    &:hover { background: rgba(255, 255, 255, 0.05) !important; color: #f9f9f9; }
+    &.is-selected { color: #55b3ff !important; background: rgba(85, 179, 255, 0.1) !important; }
+    &.is-disabled { color: #434345 !important; }
+  }
 }
 </style>

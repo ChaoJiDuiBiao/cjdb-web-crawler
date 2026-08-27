@@ -9,6 +9,11 @@
       <pre class="preview-json">{{ previewText }}</pre>
     </div>
 
+    <div class="option-section">
+      <el-checkbox v-model="downloadMediaChecked">同时下载并上传封面图</el-checkbox>
+      <div v-if="!downloadMediaChecked" class="option-tip">关闭后飞书/Notion 不再拉取封面上传，仅写其它字段（默认关闭）</div>
+    </div>
+
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
       <el-button type="primary" :loading="loading" @click="handleConfirm">
@@ -19,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { XiaohongshuNote } from '@/types'
 
 const props = defineProps<{
@@ -30,7 +35,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
-  (e: 'confirm', value: Record<string, never>): void
+  (e: 'confirm', value: { downloadImagesAndVideo: boolean }): void
   (e: 'close'): void
 }>()
 
@@ -38,6 +43,15 @@ const visible = computed({
   get: () => props.modelValue,
   set: (value: boolean) => emit('update:modelValue', value)
 })
+
+const downloadMediaChecked = ref(false)
+
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (open) downloadMediaChecked.value = false
+  }
+)
 
 const previewText = computed(() => {
   const data = props.data || []
@@ -56,7 +70,7 @@ const previewText = computed(() => {
 })
 
 function handleConfirm() {
-  emit('confirm', {})
+  emit('confirm', { downloadImagesAndVideo: downloadMediaChecked.value })
 }
 
 function handleClose() {
@@ -80,6 +94,21 @@ function handleClose() {
   color: #333;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.option-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #ebeef5;
+  font-size: 12px;
+  color: #606266;
+}
+
+.option-tip {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #909399;
+  line-height: 1.4;
 }
 
 </style>

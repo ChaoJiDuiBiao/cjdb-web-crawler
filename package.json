@@ -1,6 +1,0 @@
-{
-  "name": "cjdb-crawler",
-  "version": "1.0.0",
-  "description": "CJDB 公众号数据抓取 - 浏览器插件",
-  "private": true
-}
