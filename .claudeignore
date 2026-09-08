@@ -1,6 +1,9 @@
-小红书数据抓取/
+node_modules/
+.wxt/
+.output/
 output/
-cjdb-wxt/output/
-cjdb-wxt/node_modules/
-cjdb-wxt/.wxt/
-cjdb-wxt/package-lock.json
+dist/
+build/
+coverage/
+.omc/
+package-lock.json

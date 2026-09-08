@@ -1,0 +1,33 @@
+<template>
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <defs>
+      <linearGradient id="ink" x1="8" y1="0" x2="54" y2="64" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#172135" />
+        <stop offset="1" stop-color="#070e1c" />
+      </linearGradient>
+      <linearGradient id="red" x1="50" y1="8" x2="15" y2="61" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#ff3452" />
+        <stop offset="1" stop-color="#be1030" />
+      </linearGradient>
+      <clipPath id="tile"><rect width="64" height="64" rx="18" /></clipPath>
+    </defs>
+    <g clip-path="url(#tile)">
+      <path fill="url(#ink)" d="M0 0h64v64H0z" />
+      <path fill="url(#red)" d="M-14 50 60-5h30L10 74H-14z" />
+      <path
+        d="M12 27.5c4-1.7 11-1.9 15.8.5 1.3 3.7-.1 10.6-4.9 11.6-5.5 1.3-9.6-4.2-10.9-12.1Zm24.2.5c4.8-2.4 11.8-2.2 15.8-.5-1.3 7.9-5.4 13.4-10.9 12.1-4.8-1-6.2-7.9-4.9-11.6Z"
+        fill="#0b1322"
+        stroke="#080f1c"
+        stroke-width="2"
+      />
+      <path
+        d="M28 30q4-3 8 0M8.5 28h4M51.5 28h4"
+        stroke="#080f1c"
+        stroke-width="3"
+        stroke-linecap="round"
+      />
+      <path d="m16 29 6 1m18-1 6-1" stroke="#7c3b51" stroke-width="1.5" stroke-linecap="round" />
+      <rect x=".5" y=".5" width="63" height="63" rx="17.5" stroke="white" stroke-opacity=".12" />
+    </g>
+  </svg>
+</template>
