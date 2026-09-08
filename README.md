@@ -12,7 +12,7 @@
 
 **非自动化采集**
 
-[**下载插件**](https://github.com/ChaoJiDuiBiao/cjdb-web-crawler/releases) · [**下载与使用**](#下载与使用) · [**问题反馈**](https://github.com/ChaoJiDuiBiao/cjdb-web-crawler/issues)
+[**下载插件**](https://github.com/ChaoJiDuiBiao/cjdb-web-crawler/releases) · [**使用说明**](#使用说明) · [**问题反馈**](https://github.com/ChaoJiDuiBiao/cjdb-web-crawler/issues)
 
 <sub>v2.0.1</sub>
 
@@ -63,11 +63,11 @@ https://github.com/user-attachments/assets/ed365ea3-4af0-438e-8c6c-6d9b0549e834
 
 <sub>作品详情预览与保存位置截图使用演示数据。</sub>
 
-## 下载与使用
+## 使用说明
 
-[**下载插件安装包 →**](https://github.com/ChaoJiDuiBiao/cjdb-web-crawler/releases)
+### 方式一：本地构建
 
-也可以自行构建（需要先安装 Node.js 和 Git）：
+先安装 Node.js 和 Git，然后执行：
 
 ```bash
 git clone https://github.com/ChaoJiDuiBiao/cjdb-web-crawler.git
@@ -78,7 +78,13 @@ npm run build
 
 打开 Chrome 的 `chrome://extensions`，开启“开发者模式”，点击“加载已解压的扩展程序”，选择 `output/抄级对标数据采集器-v2.0.1` 文件夹。刷新目标网页即可使用。
 
-使用 Release 安装包时，先解压 ZIP，再加载其中包含 `manifest.json` 的文件夹。
+### 方式二：下载安装包
+
+1. 前往 [Release 下载页面](https://github.com/ChaoJiDuiBiao/cjdb-web-crawler/releases/latest)，下载 `cjdbcrawler-版本号-chrome.zip` 安装包。
+2. 解压 ZIP 文件。
+3. 打开 Chrome 的 `chrome://extensions`，开启“开发者模式”。
+4. 点击“加载已解压的扩展程序”，选择解压后包含 `manifest.json` 的文件夹。
+5. 刷新目标网页即可使用。
 
 ## 交流与反馈
 
