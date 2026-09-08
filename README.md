@@ -20,7 +20,7 @@
 
 ## 演示视频
 
-[▶ 观看演示视频（压缩版）](docs/showcase/videos/demo-compressed.mp4)
+https://github.com/user-attachments/assets/ed365ea3-4af0-438e-8c6c-6d9b0549e834
 
 [查看高清视频](docs/showcase/videos/demo.mp4)
 
