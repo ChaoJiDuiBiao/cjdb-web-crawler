@@ -14,7 +14,7 @@
 
 [**下载插件**](https://github.com/ChaoJiDuiBiao/cjdb-web-crawler/releases) · [**使用说明**](#使用说明) · [**问题反馈**](https://github.com/ChaoJiDuiBiao/cjdb-web-crawler/issues)
 
-<sub>v2.0.1</sub>
+<sub>v2.0.2</sub>
 
 </div>
 
@@ -76,7 +76,7 @@ npm ci
 npm run build
 ```
 
-打开 Chrome 的 `chrome://extensions`，开启“开发者模式”，点击“加载已解压的扩展程序”，选择 `output/抄级对标数据采集器-v2.0.1` 文件夹。刷新目标网页即可使用。
+打开 Chrome 的 `chrome://extensions`，开启“开发者模式”，点击“加载已解压的扩展程序”，选择 `output/抄级对标数据采集器-v2.0.2` 文件夹。刷新目标网页即可使用。
 
 ### 方式二：下载安装包
 

@@ -12,7 +12,7 @@ npm run zip
 ```
 
 - `dev`：启动开发模式，支持热更新。
-- `build`：生成生产扩展。输出目录由 `wxt.config.ts` 的 `outDir`、`outDirTemplate` 和 `package.json` 的版本号决定，目前为 `output/抄级对标数据采集器-v2.0.1/`。
+- `build`：生成生产扩展。输出目录由 `wxt.config.ts` 的 `outDir`、`outDirTemplate` 和 `package.json` 的版本号决定，目前为 `output/抄级对标数据采集器-v2.0.2/`。
 - `zip`：构建并在 `output/` 中生成 ZIP，具体文件名以命令输出为准。
 
 安装生产版本：打开 Chrome 扩展管理页，开启开发者模式，选择“加载已解压的扩展程序”，加载上述构建目录。
