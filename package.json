@@ -10,7 +10,8 @@
     "test": "npm run typecheck && npm run build && playwright test",
     "test:unit": "playwright test tests/unit",
     "test:browser": "npm run build && playwright test tests/browser",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
     "chrono-node": "^2.9.0",

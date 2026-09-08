@@ -18,7 +18,7 @@
           v-if="!hideClose"
           class="cjdb-text cjdb-close"
           :disabled="locked"
-          aria-label="关闭采集弹窗"
+          :aria-label="closeLabel || '关闭采集弹窗'"
           @click="emit('close')"
         >
           ×
@@ -38,6 +38,7 @@ const props = defineProps<{
   subtitle?: string
   locked?: boolean
   hideClose?: boolean
+  closeLabel?: string
 }>()
 const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLDialogElement>()

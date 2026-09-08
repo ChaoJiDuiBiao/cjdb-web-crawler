@@ -47,7 +47,7 @@ export default defineConfig({
     web_accessible_resources: [
       {
         matches: ['<all_urls>'],
-        resources: ['content-scripts/content.css', 'feishu-runtime-bridge.js', 'config.html']
+        resources: ['content-scripts/content.css', 'feishu-runtime-bridge.js', 'config.html', 'contact-qr.png']
       }
     ],
     host_permissions: [

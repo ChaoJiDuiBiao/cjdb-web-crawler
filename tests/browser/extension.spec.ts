@@ -309,13 +309,24 @@ test('先识别再预览，确认后才选存储；真实摘要、红色帮助�
   ).toBeVisible()
   await page.getByRole('checkbox', { name: '保存图片与视频文件（耗时较长）' }).uncheck()
   await page.screenshot({ path: '/private/tmp/cjdb-preview-first.png' })
-  const help = page.getByRole('button', { name: '使用帮助文档', exact: true })
+  const help = page.getByRole('button', { name: '加我微信 交流学习', exact: true })
   expect(await help.evaluate((el) => getComputedStyle(el).color)).toBe('rgb(233, 29, 70)')
-  const helpPagePromise = context.waitForEvent('page')
+  const pageCount = context.pages().length
   await help.click()
-  const helpPage = await helpPagePromise
-  await expect(helpPage).toHaveURL(new RegExp(`chrome-extension://${extensionId}/help.html`))
-  await helpPage.close()
+  const contact = page.getByRole('dialog', { name: '加我微信 交流学习', exact: true })
+  await expect(contact).toBeVisible()
+  const qr = contact.getByRole('img', { name: '作者微信二维码' })
+  await expect(qr).toBeVisible()
+  await expect.poll(() => qr.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+  await expect(contact).toContainText('添加时请备注「超级对标插件」')
+  expect(context.pages()).toHaveLength(pageCount)
+  await page.screenshot({ path: '/private/tmp/cjdb-contact-dialog.png' })
+  await page.keyboard.press('Escape')
+  await expect(contact).not.toBeVisible()
+  await expect(help).toBeFocused()
+  await help.click()
+  await contact.getByRole('button', { name: '关闭交流弹窗' }).click()
+  await expect(contact).not.toBeVisible()
   await page.evaluate(() => {
     document.getElementById('js_content')!.textContent = '页面变化不覆盖快照'
   })
@@ -655,7 +666,7 @@ test('已配置但搜索为空时，结果区域不重复展示配置或帮助�
   await expect(region.getByText('没有找到匹配项，请检查名称、ID 或数据库授权。')).toBeVisible()
   await expect(region.getByRole('button')).toHaveCount(0)
   await expect(page.getByRole('region', { name: '配置 Notion 引导' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '使用帮助文档' })).toHaveCount(1)
+  await expect(page.getByRole('button', { name: '加我微信 交流学习' })).toHaveCount(1)
   await page.screenshot({ path: '/private/tmp/cjdb-storage-empty.png' })
 })
 

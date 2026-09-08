@@ -256,11 +256,6 @@ export async function handleService(action: string, payload: any = {}): Promise<
         })
       })
       return null
-    case 'openHelp':
-      await browser.tabs.create({
-        url: browser.runtime.getURL('/help.html') + (payload.section === 'notion' ? '#notion' : '')
-      })
-      return null
     case 'openSettings':
       await browser.tabs.create({
         url:

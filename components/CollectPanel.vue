@@ -26,7 +26,7 @@
       @close="opened = false"
     >
       <template #actions
-        ><button class="cjdb-text cjdb-help" @click="openHelp">使用帮助文档</button></template
+        ><button class="cjdb-text cjdb-help" @click="contactOpen = true"><strong>加我微信</strong> 交流学习</button></template
       >
       <div class="cjdb-stack">
         <section
@@ -125,6 +125,7 @@
         </button>
       </template>
     </Modal>
+    <ContactDialog :open="contactOpen" @close="contactOpen = false" />
     <ConfigDialog
       :source="configSource"
       :open="configOpen"
@@ -146,9 +147,11 @@ import TaskResult from './TaskResult.vue'
 import Modal from './Modal.vue'
 import ConfigDialog from './ConfigDialog.vue'
 import BrandMark from './BrandMark.vue'
+import ContactDialog from './ContactDialog.vue'
 const props = defineProps<{ crawlers: any[]; resolveCrawler: () => any }>()
 const flow = useCollectionFlow()
 const { phase, progress, error, data, type, destination, task, busy, stopRequested } = flow
+const contactOpen = ref(false)
 const configOpen = ref(false)
 const configSource = ref('notion')
 const configRevision = ref(0)
@@ -289,13 +292,6 @@ function configSaved(source: string) {
   configOpen.value = false
   destination.value = null
   configRevision.value++
-}
-async function openHelp() {
-  try {
-    await service('openHelp')
-  } catch (e: any) {
-    uiError.value = e.message
-  }
 }
 const receiveTip = (message: string) => {
   if (busy.value) progress.value = message
