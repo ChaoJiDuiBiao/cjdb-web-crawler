@@ -1,6 +1,6 @@
 {
   "name": "cjdb_crawler",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -9,7 +9,8 @@
     "typecheck": "wxt prepare && vue-tsc --noEmit",
     "test": "npm run typecheck && npm run build && playwright test",
     "test:unit": "playwright test tests/unit",
-    "test:browser": "npm run build && playwright test tests/browser"
+    "test:browser": "npm run build && playwright test tests/browser",
+    "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
     "chrono-node": "^2.9.0",

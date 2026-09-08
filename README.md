@@ -14,7 +14,7 @@
 
 [**下载插件**](https://github.com/ChaoJiDuiBiao/cjdb-web-crawler/releases) · [**下载与使用**](#下载与使用) · [**问题反馈**](https://github.com/ChaoJiDuiBiao/cjdb-web-crawler/issues)
 
-<sub>v2.0.0</sub>
+<sub>v2.0.1</sub>
 
 </div>
 
@@ -45,6 +45,10 @@ https://github.com/user-attachments/assets/ed365ea3-4af0-438e-8c6c-6d9b0549e834
 
 ## 界面截图
 
+**作品详情预览**
+
+![作品详情预览：正文、图片、互动数据与作者信息](docs/showcase/images/collection-preview.png)
+
 **搜索结果采集**
 
 ![搜索结果采集：关键词、作品列表与互动数据](docs/showcase/images/preview2.png)
@@ -57,7 +61,7 @@ https://github.com/user-attachments/assets/ed365ea3-4af0-438e-8c6c-6d9b0549e834
 
 ![选择保存位置](docs/showcase/images/save-destination.png)
 
-<sub>保存位置截图使用演示数据。</sub>
+<sub>作品详情预览与保存位置截图使用演示数据。</sub>
 
 ## 下载与使用
 
@@ -72,7 +76,7 @@ npm ci
 npm run build
 ```
 
-打开 Chrome 的 `chrome://extensions`，开启“开发者模式”，点击“加载已解压的扩展程序”，选择 `output/抄级对标数据采集器-v2.0.0` 文件夹。刷新目标网页即可使用。
+打开 Chrome 的 `chrome://extensions`，开启“开发者模式”，点击“加载已解压的扩展程序”，选择 `output/抄级对标数据采集器-v2.0.1` 文件夹。刷新目标网页即可使用。
 
 使用 Release 安装包时，先解压 ZIP，再加载其中包含 `manifest.json` 的文件夹。
 
